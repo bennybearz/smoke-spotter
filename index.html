@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+  <title>Smoke Spotter JP</title>
+  <meta name="description" content="Find nearby smoking areas and smoking-friendly venues in Japan." />
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#11161d" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Smoke Spotter" />
+  <link rel="apple-touch-icon" href="icon-180.png" />
+  <link rel="icon" type="image/png" href="icon-192.png" />
+
+  <!-- Leaflet (self-hosted, cached by service worker — no third-party CDN) -->
+  <link rel="stylesheet" href="vendor/leaflet.css" />
+
+  <style>
+    :root {
+      --bg: #11161d;
+      --panel: rgba(20, 26, 34, 0.92);
+      --text: #eaf0f6;
+      --muted: #9fb0c0;
+      --public: #2e86ff;   /* official public smoking area */
+      --business: #25c281; /* smoking-friendly venue */
+      --accent: #ffb02e;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); overflow: hidden;
+    }
+    #map { position: absolute; inset: 0; background: var(--bg); }
+
+    .topbar {
+      position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
+      padding: calc(env(safe-area-inset-top) + 10px) 14px 10px;
+      background: linear-gradient(180deg, rgba(17,22,29,0.95), rgba(17,22,29,0));
+      pointer-events: none;
+    }
+    .title { font-size: 17px; font-weight: 700; letter-spacing: .2px; }
+    .title small { font-weight: 500; color: var(--muted); font-size: 12px; display: block; margin-top: 2px; }
+
+    .status {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      top: calc(env(safe-area-inset-top) + 64px); z-index: 1000;
+      background: var(--panel); border: 1px solid rgba(255,255,255,.08);
+      color: var(--text); padding: 7px 14px; border-radius: 999px;
+      font-size: 13px; font-weight: 600; backdrop-filter: blur(8px);
+      box-shadow: 0 6px 20px rgba(0,0,0,.35); white-space: nowrap;
+      max-width: 90vw; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    .legend {
+      position: absolute; left: 12px; z-index: 1000;
+      bottom: calc(env(safe-area-inset-bottom) + 14px);
+      background: var(--panel); border: 1px solid rgba(255,255,255,.08);
+      border-radius: 12px; padding: 10px 12px; font-size: 12px;
+      backdrop-filter: blur(8px); box-shadow: 0 6px 20px rgba(0,0,0,.35);
+    }
+    .legend .row { display: flex; align-items: center; gap: 8px; margin: 3px 0; color: var(--muted); }
+    .dot { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px rgba(255,255,255,.15); }
+    .dot.public { background: var(--public); }
+    .dot.business { background: var(--business); }
+
+    .locate {
+      position: absolute; right: 14px; z-index: 1000;
+      bottom: calc(env(safe-area-inset-bottom) + 14px);
+      width: 56px; height: 56px; border-radius: 50%; border: none;
+      background: var(--accent); color: #1a1205; font-size: 24px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.45); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .locate:active { transform: scale(0.94); }
+    .locate.loading { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* markers */
+    .pin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid #fff;
+           box-shadow: 0 2px 6px rgba(0,0,0,.5); }
+    .pin.public { background: var(--public); }
+    .pin.business { background: var(--business); }
+    .me { width: 16px; height: 16px; border-radius: 50%; background: #fff;
+          border: 3px solid var(--accent); box-shadow: 0 0 0 6px rgba(255,176,46,.25); }
+
+    /* popup */
+    .leaflet-popup-content-wrapper { background: #182230; color: var(--text); border-radius: 14px; }
+    .leaflet-popup-tip { background: #182230; }
+    .leaflet-popup-content { margin: 12px 14px; min-width: 200px; }
+    .pop-name { font-size: 15px; font-weight: 700; margin-bottom: 4px; line-height: 1.25; }
+    .badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
+             border-radius: 999px; margin-bottom: 8px; }
+    .badge.public { background: rgba(46,134,255,.18); color: #79b0ff; }
+    .badge.business { background: rgba(37,194,129,.18); color: #5fe0ab; }
+    .pop-dist { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .pop-detail { font-size: 12.5px; color: var(--muted); margin: 2px 0; }
+    .pop-btns { display: flex; gap: 8px; margin-top: 11px; }
+    .pop-btns a { flex: 1; text-align: center; text-decoration: none; font-size: 13px;
+                  font-weight: 700; padding: 9px 6px; border-radius: 10px; }
+    .btn-apple { background: var(--accent); color: #1a1205; }
+    .btn-google { background: #2a3646; color: var(--text); }
+
+    .toast {
+      position: absolute; left: 50%; bottom: calc(env(safe-area-inset-bottom) + 90px);
+      transform: translateX(-50%); z-index: 1200; max-width: 88vw;
+      background: #3a1d1d; color: #ffd9d9; border: 1px solid rgba(255,120,120,.3);
+      padding: 10px 14px; border-radius: 12px; font-size: 13px; text-align: center;
+      box-shadow: 0 8px 24px rgba(0,0,0,.45); display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="topbar">
+    <div class="title">🚬 Smoke Spotter JP
+      <small>Public smoking areas &amp; smoking-friendly venues near you</small>
+    </div>
+  </div>
+
+  <div class="status" id="status">Tap the locate button to start</div>
+
+  <div class="legend">
+    <div class="row"><span class="dot public"></span> Official smoking area</div>
+    <div class="row"><span class="dot business"></span> Smoking-friendly venue</div>
+  </div>
+
+  <button class="locate" id="locate" title="Find me" aria-label="Find my location">◎</button>
+  <div class="toast" id="toast"></div>
+
+  <script src="vendor/leaflet.js"></script>
+  <script src="app-core.js"></script>
+  <script>
+    var OVERPASS_ENDPOINTS = [
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter"
+    ];
+    var MIN_ZOOM_FOR_DATA = 14;
+
+    var map = L.map("map", { zoomControl: true, attributionControl: true })
+      .setView([35.6595, 139.7005], 16); // default: Shibuya, Tokyo
+
+    // Standard-resolution tiles (no @2x retina) to roughly 1/3 the mobile data.
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap &copy; CARTO'
+    }).addTo(map);
+
+    var markersLayer = L.layerGroup().addTo(map);
+    var meMarker = null;
+    var userLatLng = null;
+    var queryTimer = null;
+    var lastQueryKey = "";
+
+    var statusEl = document.getElementById("status");
+    var toastEl = document.getElementById("toast");
+    var locateBtn = document.getElementById("locate");
+
+    function setStatus(t) { statusEl.textContent = t; }
+    function toast(t) {
+      toastEl.textContent = t; toastEl.style.display = "block";
+      clearTimeout(toast._t); toast._t = setTimeout(function () { toastEl.style.display = "none"; }, 4200);
+    }
+
+    function meIcon() {
+      return L.divIcon({ className: "", html: '<div class="me"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
+    }
+    function pinIcon(category) {
+      return L.divIcon({ className: "", html: '<div class="pin ' + category + '"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
+    }
+
+    function popupHtml(spot) {
+      var distLine = "";
+      if (userLatLng) {
+        var m = SmokeCore.distanceMeters(userLatLng, { lat: spot.lat, lng: spot.lng });
+        distLine = '<div class="pop-dist">' + SmokeCore.formatDistance(m) + "</div>";
+      }
+      var details = spot.details.map(function (d) {
+        return '<div class="pop-detail">' + escapeHtml(d) + "</div>";
+      }).join("");
+      var label = spot.category === "public" ? "Official smoking area" : "Smoking-friendly venue";
+      return (
+        '<div class="pop-name">' + escapeHtml(spot.name) + "</div>" +
+        '<span class="badge ' + spot.category + '">' + label + "</span>" +
+        distLine + details +
+        '<div class="pop-btns">' +
+          '<a class="btn-apple" href="' + SmokeCore.appleMapsUrl(spot.lat, spot.lng) + '">Walk (Apple)</a>' +
+          '<a class="btn-google" href="' + SmokeCore.googleMapsUrl(spot.lat, spot.lng) + '" target="_blank" rel="noopener">Google</a>' +
+        "</div>"
+      );
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    function renderSpots(spots) {
+      markersLayer.clearLayers();
+      spots.forEach(function (s) {
+        L.marker([s.lat, s.lng], { icon: pinIcon(s.category) })
+          .bindPopup(popupHtml(s), { closeButton: true })
+          .addTo(markersLayer);
+      });
+    }
+
+    function fetchOverpass(query, idx) {
+      idx = idx || 0;
+      if (idx >= OVERPASS_ENDPOINTS.length) {
+        return Promise.reject(new Error("All Overpass endpoints failed"));
+      }
+      return fetch(OVERPASS_ENDPOINTS[idx], {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "data=" + encodeURIComponent(query)
+      }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      }).catch(function () {
+        return fetchOverpass(query, idx + 1);
+      });
+    }
+
+    function loadForCurrentView() {
+      if (map.getZoom() < MIN_ZOOM_FOR_DATA) {
+        setStatus("Zoom in to load smoking spots");
+        return;
+      }
+      var b = map.getBounds();
+      var bbox = { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() };
+      var key = [bbox.south, bbox.west, bbox.north, bbox.east].map(function (n) { return n.toFixed(3); }).join(",");
+      if (key === lastQueryKey) return;
+      lastQueryKey = key;
+
+      setStatus("Searching this area…");
+      var query = SmokeCore.buildOverpassQuery(bbox);
+      fetchOverpass(query).then(function (json) {
+        var spots = SmokeCore.parseElements(json);
+        renderSpots(spots);
+        if (spots.length === 0) setStatus("No spots tagged in this area");
+        else setStatus(spots.length + " smoking spot" + (spots.length === 1 ? "" : "s") + " shown");
+      }).catch(function () {
+        setStatus("Couldn't load — check connection");
+        toast("Data service unavailable right now. Try again in a moment.");
+        lastQueryKey = ""; // allow retry
+      });
+    }
+
+    function scheduleLoad() {
+      clearTimeout(queryTimer);
+      queryTimer = setTimeout(loadForCurrentView, 650);
+    }
+
+    map.on("moveend", scheduleLoad);
+    map.on("zoomend", scheduleLoad);
+
+    function locate() {
+      if (!navigator.geolocation) { toast("Geolocation not supported on this device."); return; }
+      locateBtn.classList.add("loading");
+      setStatus("Getting your location…");
+      navigator.geolocation.getCurrentPosition(function (pos) {
+        locateBtn.classList.remove("loading");
+        userLatLng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        if (!meMarker) meMarker = L.marker([userLatLng.lat, userLatLng.lng], { icon: meIcon(), zIndexOffset: 1000 }).addTo(map);
+        else meMarker.setLatLng([userLatLng.lat, userLatLng.lng]);
+        map.setView([userLatLng.lat, userLatLng.lng], 16);
+        lastQueryKey = "";
+        loadForCurrentView();
+      }, function (err) {
+        locateBtn.classList.remove("loading");
+        setStatus("Location unavailable");
+        toast(err.code === 1
+          ? "Location permission denied. Enable it in Settings to find spots near you."
+          : "Couldn't get your location. You can still pan the map to search any area.");
+      }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+    }
+
+    locateBtn.addEventListener("click", locate);
+
+    // Register service worker for offline app-shell + installability.
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("sw.js").catch(function () {});
+      });
+    }
+
+    // Auto-try location on first load (will prompt for permission).
+    setTimeout(locate, 600);
+  </script>
+</body>
+</html>

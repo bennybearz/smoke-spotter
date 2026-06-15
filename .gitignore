@@ -1,0 +1,11 @@
+# npm-pack leftovers from vendoring Leaflet (not needed in the repo)
+package/
+leaflet-*.tgz
+node_modules/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
