@@ -113,6 +113,33 @@
     return out;
   }
 
+  // Parse a "lat,lng" string into coords, or null if not valid coordinates.
+  function parseLatLng(str) {
+    if (!str) return null;
+    var m = String(str).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+    if (!m) return null;
+    var lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    return { lat: lat, lng: lng };
+  }
+
+  // Build a free Nominatim (OpenStreetMap) geocoding URL for a place query.
+  function nominatimUrl(query) {
+    return (
+      "https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=en&q=" +
+      encodeURIComponent(query)
+    );
+  }
+
+  // Parse the first Nominatim result into {lat, lng, name}, or null.
+  function parseGeocode(json) {
+    if (!Array.isArray(json) || !json.length) return null;
+    var r = json[0];
+    var lat = parseFloat(r.lat), lng = parseFloat(r.lon);
+    if (isNaN(lat) || isNaN(lng)) return null;
+    return { lat: lat, lng: lng, name: r.display_name || "" };
+  }
+
   // Apple Maps walking-directions deep link (opens Apple Maps app on iOS).
   function appleMapsUrl(lat, lng) {
     return "https://maps.apple.com/?daddr=" + lat + "," + lng + "&dirflg=w";
@@ -151,6 +178,9 @@
   var api = {
     POSITIVE_SMOKING: POSITIVE_SMOKING,
     buildOverpassQuery: buildOverpassQuery,
+    parseLatLng: parseLatLng,
+    nominatimUrl: nominatimUrl,
+    parseGeocode: parseGeocode,
     categorize: categorize,
     venueKind: venueKind,
     displayName: displayName,

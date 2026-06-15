@@ -51,6 +51,28 @@ ok("google dir api", g.includes("/maps/dir/?api=1"));
 ok("google destination", g.includes("destination=35.66,139.7"));
 ok("google walking", g.includes("travelmode=walking"));
 
+// parseLatLng
+ok("latlng basic", JSON.stringify(C.parseLatLng("35.66, 139.70")) === JSON.stringify({ lat: 35.66, lng: 139.7 }));
+ok("latlng no space", JSON.stringify(C.parseLatLng("35.66,139.70")) === JSON.stringify({ lat: 35.66, lng: 139.7 }));
+ok("latlng negative", JSON.stringify(C.parseLatLng("-33.86,151.2")) === JSON.stringify({ lat: -33.86, lng: 151.2 }));
+ok("latlng rejects words", C.parseLatLng("Shibuya, Tokyo") === null);
+ok("latlng rejects out-of-range", C.parseLatLng("200,300") === null);
+ok("latlng rejects empty", C.parseLatLng("") === null);
+
+// nominatimUrl
+const nu = C.nominatimUrl("Shibuya, Tokyo");
+ok("nominatim host", nu.startsWith("https://nominatim.openstreetmap.org/search?"));
+ok("nominatim json", nu.includes("format=json"));
+ok("nominatim encodes query", nu.includes("q=Shibuya%2C%20Tokyo"));
+
+// parseGeocode
+const geo = C.parseGeocode([{ lat: "35.6595", lon: "139.7005", display_name: "Shibuya" }]);
+ok("geocode lat", geo.lat === 35.6595);
+ok("geocode lng", geo.lng === 139.7005);
+ok("geocode name", geo.name === "Shibuya");
+ok("geocode empty -> null", C.parseGeocode([]) === null);
+ok("geocode bad -> null", C.parseGeocode([{ lat: "x", lon: "y" }]) === null);
+
 // Distance
 const d = C.distanceMeters({ lat: 35.6595, lng: 139.7005 }, { lat: 35.6595, lng: 139.7050 });
 ok("distance ~407m", Math.abs(d - 407) < 40);

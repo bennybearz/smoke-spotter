@@ -39,16 +39,33 @@
 
     .topbar {
       position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
-      padding: calc(env(safe-area-inset-top) + 10px) 14px 10px;
-      background: linear-gradient(180deg, rgba(17,22,29,0.95), rgba(17,22,29,0));
+      padding: calc(env(safe-area-inset-top) + 10px) 14px 12px;
+      background: linear-gradient(180deg, rgba(17,22,29,0.97) 60%, rgba(17,22,29,0));
       pointer-events: none;
     }
     .title { font-size: 17px; font-weight: 700; letter-spacing: .2px; }
-    .title small { font-weight: 500; color: var(--muted); font-size: 12px; display: block; margin-top: 2px; }
+
+    .searchbar { display: flex; gap: 8px; margin-top: 10px; pointer-events: auto; }
+    .searchbar input {
+      flex: 1; min-width: 0; padding: 11px 14px; border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.12); background: var(--panel); color: var(--text);
+      font-size: 16px; backdrop-filter: blur(8px); box-shadow: 0 4px 14px rgba(0,0,0,.3);
+    }
+    .searchbar input::placeholder { color: var(--muted); }
+    .searchbar button {
+      padding: 0 18px; border: none; border-radius: 12px; background: var(--accent);
+      color: #1a1205; font-weight: 700; font-size: 15px; cursor: pointer;
+    }
+    .searchbar button:disabled { opacity: .6; }
+
+    /* Push Leaflet's zoom buttons clear of the header + search bar. */
+    .leaflet-top.leaflet-left .leaflet-control {
+      margin-top: calc(env(safe-area-inset-top) + 104px); margin-left: 12px;
+    }
 
     .status {
       position: absolute; left: 50%; transform: translateX(-50%);
-      top: calc(env(safe-area-inset-top) + 64px); z-index: 1000;
+      top: calc(env(safe-area-inset-top) + 112px); z-index: 1000;
       background: var(--panel); border: 1px solid rgba(255,255,255,.08);
       color: var(--text); padding: 7px 14px; border-radius: 999px;
       font-size: 13px; font-weight: 600; backdrop-filter: blur(8px);
@@ -118,12 +135,15 @@
   <div id="map"></div>
 
   <div class="topbar">
-    <div class="title">🚬 Smoke Spotter JP
-      <small>Public smoking areas &amp; smoking-friendly venues near you</small>
-    </div>
+    <div class="title">🚬 Smoke Spotter JP</div>
+    <form class="searchbar" id="searchForm">
+      <input id="searchInput" type="text" inputmode="search" autocomplete="off"
+             enterkeyhint="search" placeholder="Search address, place, or lat,lng" />
+      <button type="submit" id="searchBtn">Go</button>
+    </form>
   </div>
 
-  <div class="status" id="status">Tap the locate button to start</div>
+  <div class="status" id="status">Search a place, or tap ◎ to use your location</div>
 
   <div class="legend">
     <div class="row"><span class="dot public"></span> Official smoking area</div>
@@ -261,18 +281,23 @@
     map.on("moveend", scheduleLoad);
     map.on("zoomend", scheduleLoad);
 
+    // Set the reference point (from GPS or a search) and load nearby spots.
+    function setReferenceLocation(lat, lng) {
+      userLatLng = { lat: lat, lng: lng };
+      if (!meMarker) meMarker = L.marker([lat, lng], { icon: meIcon(), zIndexOffset: 1000 }).addTo(map);
+      else meMarker.setLatLng([lat, lng]);
+      map.setView([lat, lng], 16);
+      lastQueryKey = "";
+      loadForCurrentView();
+    }
+
     function locate() {
       if (!navigator.geolocation) { toast("Geolocation not supported on this device."); return; }
       locateBtn.classList.add("loading");
       setStatus("Getting your location…");
       navigator.geolocation.getCurrentPosition(function (pos) {
         locateBtn.classList.remove("loading");
-        userLatLng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        if (!meMarker) meMarker = L.marker([userLatLng.lat, userLatLng.lng], { icon: meIcon(), zIndexOffset: 1000 }).addTo(map);
-        else meMarker.setLatLng([userLatLng.lat, userLatLng.lng]);
-        map.setView([userLatLng.lat, userLatLng.lng], 16);
-        lastQueryKey = "";
-        loadForCurrentView();
+        setReferenceLocation(pos.coords.latitude, pos.coords.longitude);
       }, function (err) {
         locateBtn.classList.remove("loading");
         setStatus("Location unavailable");
@@ -283,6 +308,44 @@
     }
 
     locateBtn.addEventListener("click", locate);
+
+    // Search: accept a place name/address OR raw "lat,lng" coordinates.
+    var searchForm = document.getElementById("searchForm");
+    var searchInput = document.getElementById("searchInput");
+    var searchBtn = document.getElementById("searchBtn");
+
+    searchForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var q = searchInput.value.trim();
+      if (!q) return;
+      searchInput.blur();
+
+      var ll = SmokeCore.parseLatLng(q);
+      if (ll) {
+        setStatus("Centering on those coordinates…");
+        setReferenceLocation(ll.lat, ll.lng);
+        return;
+      }
+
+      setStatus("Searching for “" + q + "”…");
+      searchBtn.disabled = true;
+      fetch(SmokeCore.nominatimUrl(q), { headers: { "Accept": "application/json" } })
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function (j) {
+          var g = SmokeCore.parseGeocode(j);
+          if (!g) {
+            setStatus("No match for that place");
+            toast("Couldn't find that place. Try adding a city/country, or paste lat,lng.");
+            return;
+          }
+          setReferenceLocation(g.lat, g.lng);
+        })
+        .catch(function () {
+          setStatus("Search unavailable");
+          toast("Location search is unavailable right now. You can paste lat,lng instead.");
+        })
+        .then(function () { searchBtn.disabled = false; });
+    });
 
     // Register service worker for offline app-shell + installability.
     if ("serviceWorker" in navigator) {
