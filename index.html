@@ -71,7 +71,9 @@
       font-size: 13px; font-weight: 600; backdrop-filter: blur(8px);
       box-shadow: 0 6px 20px rgba(0,0,0,.35); white-space: nowrap;
       max-width: 90vw; overflow: hidden; text-overflow: ellipsis;
+      transition: opacity .45s ease, visibility .45s ease;
     }
+    .status.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
 
     .legend {
       position: absolute; left: 12px; z-index: 1000;
@@ -182,7 +184,17 @@
     var toastEl = document.getElementById("toast");
     var locateBtn = document.getElementById("locate");
 
-    function setStatus(t) { statusEl.textContent = t; }
+    // Show the status pill; auto-hide after a few seconds unless `sticky`
+    // (used for in-progress messages that should stay until results replace them).
+    var statusTimer = null;
+    function setStatus(t, sticky) {
+      statusEl.textContent = t;
+      statusEl.classList.remove("hidden");
+      clearTimeout(statusTimer);
+      if (!sticky) {
+        statusTimer = setTimeout(function () { statusEl.classList.add("hidden"); }, 3500);
+      }
+    }
     function toast(t) {
       toastEl.textContent = t; toastEl.style.display = "block";
       clearTimeout(toast._t); toast._t = setTimeout(function () { toastEl.style.display = "none"; }, 4200);
@@ -259,7 +271,7 @@
       if (key === lastQueryKey) return;
       lastQueryKey = key;
 
-      setStatus("Searching this area…");
+      setStatus("Searching this area…", true);
       var query = SmokeCore.buildOverpassQuery(bbox);
       fetchOverpass(query).then(function (json) {
         var spots = SmokeCore.parseElements(json);
@@ -294,7 +306,7 @@
     function locate() {
       if (!navigator.geolocation) { toast("Geolocation not supported on this device."); return; }
       locateBtn.classList.add("loading");
-      setStatus("Getting your location…");
+      setStatus("Getting your location…", true);
       navigator.geolocation.getCurrentPosition(function (pos) {
         locateBtn.classList.remove("loading");
         setReferenceLocation(pos.coords.latitude, pos.coords.longitude);
@@ -322,12 +334,12 @@
 
       var ll = SmokeCore.parseLatLng(q);
       if (ll) {
-        setStatus("Centering on those coordinates…");
+        setStatus("Centering on those coordinates…", true);
         setReferenceLocation(ll.lat, ll.lng);
         return;
       }
 
-      setStatus("Searching for “" + q + "”…");
+      setStatus("Searching for “" + q + "”…", true);
       searchBtn.disabled = true;
       fetch(SmokeCore.nominatimUrl(q), { headers: { "Accept": "application/json" } })
         .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
