@@ -238,15 +238,9 @@
       markersLayer.clearLayers();
       spots.forEach(function (s) {
         L.marker([s.lat, s.lng], { icon: pinIcon(s.category) })
-          .bindPopup(popupHtml(s), {
-            closeButton: true,
-            autoPan: true,
-            keepInView: true,
-            // Reserve space for the header/search bar (top) and legend/locate (bottom)
-            // so an opened popup is never hidden behind the overlay UI.
-            autoPanPaddingTopLeft: L.point(12, 132),
-            autoPanPaddingBottomRight: L.point(12, 96)
-          })
+          // autoPan off — we pan manually in 'popupopen' using the real measured
+          // height of the search bar / controls so the popup always clears them.
+          .bindPopup(popupHtml(s), { closeButton: true, autoPan: false })
           .addTo(markersLayer);
       });
     }
@@ -300,6 +294,33 @@
 
     map.on("moveend", scheduleLoad);
     map.on("zoomend", scheduleLoad);
+
+    // When a popup opens, nudge the map so the whole popup is visible — clear of
+    // the search bar (top) and the legend/locate button (bottom). Measures the
+    // real element sizes so it adapts to any screen / wrapped header.
+    map.on("popupopen", function (e) {
+      var el = e.popup.getElement();
+      if (!el) return;
+      var mapRect = map.getContainer().getBoundingClientRect();
+      var pop = el.getBoundingClientRect();
+      var topbar = document.querySelector(".topbar");
+      var legend = document.querySelector(".legend");
+      var loc = document.getElementById("locate");
+      var reserve = {
+        top: topbar ? topbar.getBoundingClientRect().bottom - mapRect.top : 110,
+        bottom: Math.max(
+          legend ? mapRect.bottom - legend.getBoundingClientRect().top : 0,
+          loc ? mapRect.bottom - loc.getBoundingClientRect().top : 0
+        ),
+        left: 6, right: 6, pad: 10
+      };
+      var d = SmokeCore.panDelta(
+        { top: pop.top, bottom: pop.bottom, left: pop.left, right: pop.right },
+        { top: mapRect.top, left: mapRect.left, width: mapRect.width, height: mapRect.height },
+        reserve
+      );
+      if (d.dx || d.dy) map.panBy([-d.dx, -d.dy], { animate: true });
+    });
 
     // Set the reference point (from GPS or a search) and load nearby spots.
     function setReferenceLocation(lat, lng) {

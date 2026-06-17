@@ -78,6 +78,25 @@ ok("geocode name", geo.name === "Shibuya");
 ok("geocode empty -> null", C.parseGeocode([]) === null);
 ok("geocode bad -> null", C.parseGeocode([{ lat: "x", lon: "y" }]) === null);
 
+// panDelta — popup positioning relative to reserved overlay zones
+const cont = { top: 0, left: 0, width: 400, height: 800 };
+const reserve = { top: 120, bottom: 90, left: 6, right: 6, pad: 10 };
+// fully clear -> no movement
+ok("panDelta clear", JSON.stringify(C.panDelta({ top: 300, bottom: 450, left: 100, right: 300 }, cont, reserve)) === JSON.stringify({ dx: 0, dy: 0 }));
+// popup under the header (top=40) -> push content DOWN
+const pd1 = C.panDelta({ top: 40, bottom: 240, left: 100, right: 300 }, cont, reserve);
+ok("panDelta top clipped -> dy down", pd1.dy === (120 + 10) - 40 && pd1.dy > 0);
+ok("panDelta top clipped -> dx 0", pd1.dx === 0);
+// popup below the bottom controls -> push content UP (negative dy)
+const pd2 = C.panDelta({ top: 600, bottom: 760, left: 100, right: 300 }, cont, reserve);
+ok("panDelta bottom clipped -> dy up", pd2.dy < 0);
+// popup off the right edge -> push content LEFT (negative dx)
+const pd3 = C.panDelta({ top: 300, bottom: 450, left: 260, right: 410 }, cont, reserve);
+ok("panDelta right clipped -> dx left", pd3.dx < 0);
+// popup off the left edge -> push content RIGHT (positive dx)
+const pd4 = C.panDelta({ top: 300, bottom: 450, left: -10, right: 140 }, cont, reserve);
+ok("panDelta left clipped -> dx right", pd4.dx > 0);
+
 // Distance
 const d = C.distanceMeters({ lat: 35.6595, lng: 139.7005 }, { lat: 35.6595, lng: 139.7050 });
 ok("distance ~407m", Math.abs(d - 407) < 40);

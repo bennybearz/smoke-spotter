@@ -158,6 +158,30 @@
     );
   }
 
+  // Work out how far to move the map so an open popup clears the overlay UI.
+  // `popup` and `container` are getBoundingClientRect-style boxes (viewport coords).
+  // `reserve` = pixels to keep clear inside the container on each edge (+ pad).
+  // Returns { dx, dy } = how far the map CONTENT should move; caller does
+  // map.panBy([-dx, -dy]).
+  function panDelta(popup, container, reserve) {
+    var pad = (reserve && reserve.pad) || 8;
+    var rTop = (reserve && reserve.top) || 0;
+    var rBottom = (reserve && reserve.bottom) || 0;
+    var rLeft = (reserve && reserve.left) || 0;
+    var rRight = (reserve && reserve.right) || 0;
+    var H = container.height, W = container.width;
+    var topIn = popup.top - container.top;
+    var botIn = popup.bottom - container.top;
+    var leftIn = popup.left - container.left;
+    var rightIn = popup.right - container.left;
+    var dx = 0, dy = 0;
+    if (topIn < rTop + pad) dy = (rTop + pad) - topIn;            // move content down
+    else if (botIn > H - rBottom - pad) dy = (H - rBottom - pad) - botIn; // up
+    if (leftIn < rLeft + pad) dx = (rLeft + pad) - leftIn;        // right
+    else if (rightIn > W - rRight - pad) dx = (W - rRight - pad) - rightIn; // left
+    return { dx: dx, dy: dy };
+  }
+
   // Haversine distance in metres, for "X m away" in popups.
   function distanceMeters(a, b) {
     var R = 6371000;
@@ -190,6 +214,7 @@
     parseElements: parseElements,
     appleMapsUrl: appleMapsUrl,
     googleMapsUrl: googleMapsUrl,
+    panDelta: panDelta,
     distanceMeters: distanceMeters,
     formatDistance: formatDistance,
   };
