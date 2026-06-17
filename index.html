@@ -238,7 +238,15 @@
       markersLayer.clearLayers();
       spots.forEach(function (s) {
         L.marker([s.lat, s.lng], { icon: pinIcon(s.category) })
-          .bindPopup(popupHtml(s), { closeButton: true })
+          .bindPopup(popupHtml(s), {
+            closeButton: true,
+            autoPan: true,
+            keepInView: true,
+            // Reserve space for the header/search bar (top) and legend/locate (bottom)
+            // so an opened popup is never hidden behind the overlay UI.
+            autoPanPaddingTopLeft: L.point(12, 132),
+            autoPanPaddingBottomRight: L.point(12, 96)
+          })
           .addTo(markersLayer);
       });
     }

@@ -2,7 +2,7 @@
    - App shell + Leaflet are self-hosted and cached: downloaded once, then free/offline.
    - Map tiles are cached (cache-first, capped) so re-walking an area doesn't re-download.
    - Overpass data is always fetched fresh from the network (never cached). */
-var SHELL_CACHE = "smoke-shell-v4";
+var SHELL_CACHE = "smoke-shell-v5";
 var TILE_CACHE = "smoke-tiles-v1";
 var TILE_MAX = 400; // ~ a few MB; plenty for a day of walking a neighborhood
 

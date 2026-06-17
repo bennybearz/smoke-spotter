@@ -114,9 +114,11 @@
   }
 
   // Parse a "lat,lng" string into coords, or null if not valid coordinates.
+  // Accepts comma and/or whitespace as the separator: "35.6,139.7",
+  // "35.6, 139.7", and "35.6 139.7" all work.
   function parseLatLng(str) {
     if (!str) return null;
-    var m = String(str).trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+    var m = String(str).trim().match(/^(-?\d+(?:\.\d+)?)(?:\s*,\s*|\s+)(-?\d+(?:\.\d+)?)$/);
     if (!m) return null;
     var lat = parseFloat(m[1]), lng = parseFloat(m[2]);
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;

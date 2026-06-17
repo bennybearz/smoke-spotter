@@ -54,6 +54,11 @@ ok("google walking", g.includes("travelmode=walking"));
 // parseLatLng
 ok("latlng basic", JSON.stringify(C.parseLatLng("35.66, 139.70")) === JSON.stringify({ lat: 35.66, lng: 139.7 }));
 ok("latlng no space", JSON.stringify(C.parseLatLng("35.66,139.70")) === JSON.stringify({ lat: 35.66, lng: 139.7 }));
+ok("latlng space separated", JSON.stringify(C.parseLatLng("35.66 139.70")) === JSON.stringify({ lat: 35.66, lng: 139.7 }));
+ok("latlng comma+space", JSON.stringify(C.parseLatLng("35.66 , 139.70")) === JSON.stringify({ lat: 35.66, lng: 139.7 }));
+ok("latlng multi-space", JSON.stringify(C.parseLatLng("35.66   139.70")) === JSON.stringify({ lat: 35.66, lng: 139.7 }));
+ok("latlng neg space", JSON.stringify(C.parseLatLng("-33.86 151.2")) === JSON.stringify({ lat: -33.86, lng: 151.2 }));
+ok("latlng high precision comma-space", JSON.stringify(C.parseLatLng("35.70034380, 139.66725540")) === JSON.stringify({ lat: 35.7003438, lng: 139.6672554 }));
 ok("latlng negative", JSON.stringify(C.parseLatLng("-33.86,151.2")) === JSON.stringify({ lat: -33.86, lng: 151.2 }));
 ok("latlng rejects words", C.parseLatLng("Shibuya, Tokyo") === null);
 ok("latlng rejects out-of-range", C.parseLatLng("200,300") === null);
