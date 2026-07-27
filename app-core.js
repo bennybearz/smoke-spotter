@@ -197,7 +197,10 @@
     var q = normalizeQuery(raw);
     var list = [];
     if (!q) return list;
-    if (hasJapanese(q)) list.push({ kind: "gsi", url: gsiUrl(q) });
+    // GSI excels at structured Japanese ADDRESSES but mis-handles bare
+    // place/landmark names (can match the wrong prefecture). Only try it first
+    // when the query looks address-like: Japanese text with a number in it.
+    if (hasJapanese(q) && /\d/.test(q)) list.push({ kind: "gsi", url: gsiUrl(q) });
     list.push({ kind: "nominatim", url: nominatimUrl(q) });
     var stripped = stripLeadingSegment(q);
     if (stripped && stripped !== q) {

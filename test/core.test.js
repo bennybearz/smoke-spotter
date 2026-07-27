@@ -107,6 +107,12 @@ ok("geocodeQueries includes stripped", gq.some(a => a.kind === "nominatim" && /2
 // non-Japanese query -> no GSI attempt
 const gq2 = C.geocodeQueries("Shibuya Crossing, Tokyo");
 ok("geocodeQueries no gsi for romaji", gq2.every(a => a.kind === "nominatim"));
+// Japanese landmark NAME (no digits) -> no GSI first (avoids wrong-prefecture match)
+const gq3 = C.geocodeQueries("渋谷スクランブル交差点");
+ok("geocodeQueries no gsi for JP name w/o digits", gq3.every(a => a.kind === "nominatim"));
+// Clean Japanese ADDRESS (has digits) -> GSI first
+const gq4 = C.geocodeQueries("東京都中野区中央5-23-10");
+ok("geocodeQueries gsi first for JP address", gq4[0].kind === "gsi");
 
 // panDelta — popup positioning relative to reserved overlay zones
 const cont = { top: 0, left: 0, width: 400, height: 800 };
