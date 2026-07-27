@@ -78,6 +78,36 @@ ok("geocode name", geo.name === "Shibuya");
 ok("geocode empty -> null", C.parseGeocode([]) === null);
 ok("geocode bad -> null", C.parseGeocode([{ lat: "x", lon: "y" }]) === null);
 
+// Japan-aware geocoding
+const jpAddr = "申ブリリア中野, 23-10, Chuo 5-Chōme\nNakano, Tokyo\nJapan 164-0011";
+ok("normalizeQuery collapses newlines/spaces", C.normalizeQuery(jpAddr) === "申ブリリア中野, 23-10, Chuo 5-Chōme Nakano, Tokyo Japan 164-0011");
+ok("hasJapanese true", C.hasJapanese(jpAddr) === true);
+ok("hasJapanese false", C.hasJapanese("Shibuya, Tokyo") === false);
+ok("extractJpPostal hyphen", C.extractJpPostal(jpAddr) === "164-0011");
+ok("extractJpPostal 7-digit", C.extractJpPostal("Chuo, Nakano 1640011") === "164-0011");
+ok("extractJpPostal none", C.extractJpPostal("Shibuya Crossing") === null);
+ok("extractJpPostal ignores block 23-10", C.extractJpPostal("23-10 only") === null);
+ok("stripLeadingSegment drops building", C.stripLeadingSegment("Brillia, 23-10, Chuo, Tokyo") === "23-10, Chuo, Tokyo");
+ok("stripLeadingSegment single -> null", C.stripLeadingSegment("Tokyo") === null);
+const gsiu = C.gsiUrl("東京都中野区中央5-23-10");
+ok("gsi host", gsiu.startsWith("https://msearch.gsi.go.jp/address-search/AddressSearch?q="));
+const gg = C.parseGsi([{ geometry: { coordinates: [139.6672, 35.7003] }, properties: { title: "中央五丁目" } }]);
+ok("parseGsi lat/lng (lng,lat order)", gg.lat === 35.7003 && gg.lng === 139.6672);
+ok("parseGsi name", gg.name === "中央五丁目");
+ok("parseGsi empty -> null", C.parseGsi([]) === null);
+ok("parseGeoResult routes gsi", C.parseGeoResult("gsi", [{ geometry: { coordinates: [139, 35] } }]).lat === 35);
+ok("parseGeoResult routes nominatim", C.parseGeoResult("nominatim", [{ lat: "35", lon: "139" }]).lng === 139);
+const nq = C.nominatimPostalUrl("164-0011");
+ok("nominatim postal url", nq.includes("postalcode=164-0011") && nq.includes("countrycodes=jp"));
+// geocodeQueries: JP address -> GSI first, then OSM full, stripped, postal
+const gq = C.geocodeQueries(jpAddr);
+ok("geocodeQueries first is gsi", gq[0].kind === "gsi");
+ok("geocodeQueries includes postal fallback", gq.some(a => a.url.includes("postalcode=164-0011")));
+ok("geocodeQueries includes stripped", gq.some(a => a.kind === "nominatim" && /23-10/.test(decodeURIComponent(a.url)) && !/ブリリア/.test(decodeURIComponent(a.url))));
+// non-Japanese query -> no GSI attempt
+const gq2 = C.geocodeQueries("Shibuya Crossing, Tokyo");
+ok("geocodeQueries no gsi for romaji", gq2.every(a => a.kind === "nominatim"));
+
 // panDelta — popup positioning relative to reserved overlay zones
 const cont = { top: 0, left: 0, width: 400, height: 800 };
 const reserve = { top: 120, bottom: 90, left: 6, right: 6, pad: 10 };

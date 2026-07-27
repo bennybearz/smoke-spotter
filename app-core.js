@@ -142,6 +142,77 @@
     return { lat: lat, lng: lng, name: r.display_name || "" };
   }
 
+  // --- Japan-aware geocoding ------------------------------------------------
+  // Japanese addresses geocode poorly as one messy string (building name +
+  // block number + romanized district + postal code). We try several
+  // progressively-simpler queries across two geocoders until one resolves.
+
+  function normalizeQuery(str) {
+    return String(str || "").replace(/\s+/g, " ").trim();
+  }
+
+  function hasJapanese(str) {
+    return /[぀-ヿ㐀-鿿ｦ-ﾟ]/.test(String(str || ""));
+  }
+
+  // Extract a Japanese postal code (NNN-NNNN or NNNNNNN) -> "NNN-NNNN" or null.
+  function extractJpPostal(str) {
+    var m = String(str || "").match(/(\d{3})-?(\d{4})(?!\d)/);
+    return m ? m[1] + "-" + m[2] : null;
+  }
+
+  // Drop the first comma-separated segment (usually a building name that no
+  // geocoder can match) -> the rest, or null if there's only one segment.
+  function stripLeadingSegment(str) {
+    var parts = String(str || "").split(",");
+    if (parts.length < 2) return null;
+    return parts.slice(1).join(",").replace(/\s+/g, " ").trim();
+  }
+
+  // GSI (Geospatial Information Authority of Japan) address search — far better
+  // than OSM for Japanese-script addresses. Returns a bare array of features.
+  function gsiUrl(query) {
+    return "https://msearch.gsi.go.jp/address-search/AddressSearch?q=" +
+      encodeURIComponent(query);
+  }
+
+  function parseGsi(json) {
+    if (!Array.isArray(json) || !json.length) return null;
+    var f = json[0];
+    var c = f && f.geometry && f.geometry.coordinates;
+    if (!c || c.length < 2) return null;
+    var lng = parseFloat(c[0]), lat = parseFloat(c[1]);
+    if (isNaN(lat) || isNaN(lng)) return null;
+    return { lat: lat, lng: lng, name: (f.properties && f.properties.title) || "" };
+  }
+
+  // Structured Nominatim lookup by Japanese postal code (reliable neighborhood).
+  function nominatimPostalUrl(postal) {
+    return "https://nominatim.openstreetmap.org/search?format=json&limit=1" +
+      "&countrycodes=jp&postalcode=" + encodeURIComponent(postal);
+  }
+
+  // Ordered list of geocoding attempts for a raw address; first hit wins.
+  function geocodeQueries(raw) {
+    var q = normalizeQuery(raw);
+    var list = [];
+    if (!q) return list;
+    if (hasJapanese(q)) list.push({ kind: "gsi", url: gsiUrl(q) });
+    list.push({ kind: "nominatim", url: nominatimUrl(q) });
+    var stripped = stripLeadingSegment(q);
+    if (stripped && stripped !== q) {
+      list.push({ kind: "nominatim", url: nominatimUrl(stripped + ", Japan") });
+    }
+    var postal = extractJpPostal(q);
+    if (postal) list.push({ kind: "nominatim", url: nominatimPostalUrl(postal) });
+    return list;
+  }
+
+  // Parse a geocoder response by its kind.
+  function parseGeoResult(kind, json) {
+    return kind === "gsi" ? parseGsi(json) : parseGeocode(json);
+  }
+
   // Apple Maps walking-directions deep link (opens Apple Maps app on iOS).
   function appleMapsUrl(lat, lng) {
     return "https://maps.apple.com/?daddr=" + lat + "," + lng + "&dirflg=w";
@@ -207,6 +278,15 @@
     parseLatLng: parseLatLng,
     nominatimUrl: nominatimUrl,
     parseGeocode: parseGeocode,
+    normalizeQuery: normalizeQuery,
+    hasJapanese: hasJapanese,
+    extractJpPostal: extractJpPostal,
+    stripLeadingSegment: stripLeadingSegment,
+    gsiUrl: gsiUrl,
+    parseGsi: parseGsi,
+    nominatimPostalUrl: nominatimPostalUrl,
+    geocodeQueries: geocodeQueries,
+    parseGeoResult: parseGeoResult,
     categorize: categorize,
     venueKind: venueKind,
     displayName: displayName,

@@ -370,23 +370,36 @@
 
       setStatus("Searching for “" + q + "”…", true);
       searchBtn.disabled = true;
-      fetch(SmokeCore.nominatimUrl(q), { headers: { "Accept": "application/json" } })
-        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-        .then(function (j) {
-          var g = SmokeCore.parseGeocode(j);
-          if (!g) {
-            setStatus("No match for that place");
-            toast("Couldn't find that place. Try adding a city/country, or paste lat,lng.");
-            return;
-          }
-          setReferenceLocation(g.lat, g.lng);
-        })
-        .catch(function () {
-          setStatus("Search unavailable");
-          toast("Location search is unavailable right now. You can paste lat,lng instead.");
-        })
-        .then(function () { searchBtn.disabled = false; });
+      geocode(q);
     });
+
+    // Try each geocoding strategy in turn (Japan GSI, then OSM full / simplified
+    // / by postal code) until one resolves. Robust for messy Japanese addresses.
+    function geocode(raw) {
+      var attempts = SmokeCore.geocodeQueries(raw);
+      var i = 0;
+      (function next() {
+        if (i >= attempts.length) {
+          setStatus("No match for that address");
+          toast("Couldn't find that address. Try the postal code, a nearby landmark/station, or paste lat,lng.");
+          searchBtn.disabled = false;
+          return;
+        }
+        var attempt = attempts[i++];
+        fetch(attempt.url, { headers: { "Accept": "application/json" } })
+          .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+          .then(function (j) {
+            var g = SmokeCore.parseGeoResult(attempt.kind, j);
+            if (g) {
+              setReferenceLocation(g.lat, g.lng);
+              searchBtn.disabled = false;
+            } else {
+              next(); // no result from this strategy — try the next
+            }
+          })
+          .catch(function () { next(); }); // network/CORS error — try the next
+      })();
+    }
 
     // Register service worker for offline app-shell + installability.
     if ("serviceWorker" in navigator) {
