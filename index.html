@@ -394,6 +394,65 @@
        first call to a function the old file doesn't have. -->
   <script src="app-core.js?v=10"></script>
   <script>
+    // --- self-heal a stale app-core.js ---------------------------------------
+    // index.html and app-core.js are separate cacheable URLs. The ?v= above
+    // stops a browser pairing a fresh page with an old script from here on, but
+    // it cannot rescue a client that is ALREADY serving a cached index.html —
+    // that client never fetches the new page, so it never sees the new ?v=.
+    // It just dies silently: every SmokeCore call below fails and buttons stop
+    // doing anything, with no error anyone can see on a phone.
+    //
+    // So check that the script we got actually provides what this page needs,
+    // and if not, repair it: drop the caches, unregister the service worker,
+    // reload. localStorage is deliberately untouched, so saved spots survive.
+    (function () {
+      // A capability check, not a version number — it can only fire when the
+      // loaded app-core genuinely lacks something, so it can't false-positive
+      // if someone forgets to bump a constant. Add to this list only if a
+      // future release truly depends on the new function.
+      var NEEDED = ["activeSpots", "purgeTombstones", "mergeSpotLists",
+                    "parseMySpots", "mySpotToMarker", "normalizeTripCode"];
+      var core = window.SmokeCore;
+      var ok = !!core && NEEDED.every(function (fn) { return typeof core[fn] === "function"; });
+
+      var FLAG = "smokespotter.selfheal";
+      if (ok) {
+        // Healthy: clear the guard so a future staleness can heal again.
+        try { sessionStorage.removeItem(FLAG); } catch (e) {}
+        return;
+      }
+      // One repair per tab session — if reloading doesn't fix it, never loop.
+      try {
+        if (sessionStorage.getItem(FLAG)) return;
+        sessionStorage.setItem(FLAG, "1");
+      } catch (e) { return; }
+
+      var o = document.createElement("div");
+      o.setAttribute("style", "position:fixed;inset:0;z-index:99999;background:#11161d;" +
+        "color:#9fb0c0;display:flex;align-items:center;justify-content:center;" +
+        "font:15px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif");
+      o.textContent = "Updating…";
+      document.body.appendChild(o);
+
+      var reloaded = false;
+      function go() { if (!reloaded) { reloaded = true; location.reload(); } }
+
+      var jobs = [];
+      if (window.caches && caches.keys) {
+        jobs.push(caches.keys().then(function (ks) {
+          return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+        }));
+      }
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) {
+          return Promise.all(rs.map(function (r) { return r.unregister(); }));
+        }));
+      }
+      Promise.all(jobs).then(go, go);
+      setTimeout(go, 4000); // never hang if the cache API is wedged
+    })();
+  </script>
+  <script>
     var OVERPASS_ENDPOINTS = [
       "https://overpass-api.de/api/interpreter",
       "https://overpass.kumi.systems/api/interpreter",
