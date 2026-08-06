@@ -2,14 +2,18 @@
    - App shell + Leaflet are self-hosted and cached: downloaded once, then free/offline.
    - Map tiles are cached (cache-first, capped) so re-walking an area doesn't re-download.
    - Overpass data is always fetched fresh from the network (never cached). */
-var SHELL_CACHE = "smoke-shell-v9";
+// Bump SHELL_CACHE *and* the ?v= on app-core.js in index.html together — they
+// are one version number split across two files.
+var SHELL_CACHE = "smoke-shell-v10";
 var TILE_CACHE = "smoke-tiles-v1";
 var TILE_MAX = 400; // ~ a few MB; plenty for a day of walking a neighborhood
 
 var SHELL = [
   "./",
   "./index.html",
-  "./app-core.js",
+  // Must carry the same ?v= the page requests, or this entry never matches and
+  // app-core.js quietly stops working offline.
+  "./app-core.js?v=10",
   "./manifest.webmanifest",
   "./vendor/leaflet.js",
   "./vendor/leaflet.css",

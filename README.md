@@ -144,6 +144,7 @@ In Japan you'll likely be on pocket-wifi or an eSIM, so the app minimizes data:
 - `functions/` — the sync API, run by Cloudflare Pages Functions
   (`api/spots.js` = pull/push, `api/photo.js` = one photo, `_shared.js` = validation).
 - `schema.sql` — the D1 table. Apply it once; see the setup steps above.
+- `_headers` — Cloudflare Pages cache rules; keeps the app shell revalidated.
 
 ## Developer notes (Aaron 👋)
 No framework, no bundler, no build — it's a static site, so "deploy" is just serving these
@@ -174,10 +175,23 @@ Where to make changes:
   spot flaps between two devices forever), and a metadata-only pull must never erase a
   photo the device already holds. The server re-validates everything independently —
   never relax `functions/_shared.js` to match the client.
-- **Caching / offline / data budget** → `sw.js`. Bump the `SHELL_CACHE` version string when
-  you change cached shell files so clients pick up the update. Note `/api/` is explicitly
-  excluded from caching: the app-shell rule is cache-first, which would otherwise pin the
-  first sync response forever and make the list look frozen.
+- **Caching / offline / data budget** → `sw.js`. Note `/api/` is explicitly excluded from
+  caching: the app-shell rule is cache-first, which would otherwise pin the first sync
+  response forever and make the list look frozen.
+
+> ### ⚠️ When you change `app-core.js`, bump the version in **three** places
+> `index.html`'s `<script src="app-core.js?v=N">`, the matching `./app-core.js?v=N` in
+> `sw.js`'s `SHELL` list, and `SHELL_CACHE` in `sw.js`. They are one version number
+> split across two files.
+>
+> This exists because of a real failure. `index.html` and `app-core.js` are separate
+> cacheable URLs, so a browser can pair a **fresh `index.html` with a cached old
+> `app-core.js`**. The two then disagree about what `SmokeCore` exports and the app dies
+> on the first missing function — silently, since the error is swallowed by a click
+> handler. The visible symptom is bizarre: the legend reads the hardcoded "My spots"
+> instead of a spot count, and tapping it does nothing at all. The `?v=` makes each
+> release a distinct URL, so a stale copy simply can't be reached. `_headers` keeps
+> `index.html` and `sw.js` revalidated so the new `?v=` is always seen.
 
 Tile source is CARTO dark basemap; data source is the public Overpass API (`amenity=smoking_area`
 plus `smoking=yes|dedicated|outside|isolated|separated`). Both are free third-party services —

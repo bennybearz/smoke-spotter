@@ -1,0 +1,25 @@
+# Cloudflare Pages response headers.
+#
+# The app shell must always be revalidated. index.html references
+# app-core.js?v=N; if a stale index.html is served it pins the *old* N, the two
+# files disagree about what SmokeCore exports, and the app dies on the first
+# call to a function the old one doesn't have. That failure is silent and looks
+# like "tapping the button does nothing".
+#
+# sw.js is listed for the same reason: it decides which shell files get cached,
+# so it must never itself be served from cache.
+#
+# Everything else (vendor/, icons) is content-stable and left to cache normally,
+# which matters — this app is used on metered mobile data.
+
+/
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+/sw.js
+  Cache-Control: no-cache
+
+/manifest.webmanifest
+  Cache-Control: no-cache
