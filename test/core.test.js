@@ -139,5 +139,98 @@ ok("distance ~407m", Math.abs(d - 407) < 40);
 ok("format m", C.formatDistance(420) === "420 m away");
 ok("format km", C.formatDistance(1500) === "1.5 km away");
 
+// --- User-saved spots -------------------------------------------------------
+
+// makeSpotId — deterministic given its inputs, and unique across calls
+ok("makeSpotId prefixed", C.makeSpotId(1000, 0.5).startsWith("mine-"));
+ok("makeSpotId deterministic", C.makeSpotId(1754500000000, 0.42) === C.makeSpotId(1754500000000, 0.42));
+ok("makeSpotId varies by time", C.makeSpotId(1000, 0.5) !== C.makeSpotId(1001, 0.5));
+ok("makeSpotId varies by rand", C.makeSpotId(1000, 0.5) !== C.makeSpotId(1000, 0.6));
+
+// normalizeMySpot — accepts good records, rejects/repairs bad ones
+const goodRaw = { id: "mine-a", lat: 35.66, lng: 139.7, name: "Station east exit", photo: "data:image/jpeg;base64,AAA", savedAt: 1754500000000, accuracy: 8.4 };
+const good = C.normalizeMySpot(goodRaw);
+ok("normalize keeps coords", good.lat === 35.66 && good.lng === 139.7);
+ok("normalize keeps name", good.name === "Station east exit");
+ok("normalize keeps data-url photo", good.photo === "data:image/jpeg;base64,AAA");
+ok("normalize rounds accuracy", good.accuracy === 8);
+ok("normalize no id -> null", C.normalizeMySpot({ lat: 35, lng: 139 }) === null);
+ok("normalize bad coords -> null", C.normalizeMySpot({ id: "x", lat: "abc", lng: 139 }) === null);
+ok("normalize out-of-range -> null", C.normalizeMySpot({ id: "x", lat: 200, lng: 139 }) === null);
+ok("normalize non-object -> null", C.normalizeMySpot("nope") === null);
+ok("normalize null -> null", C.normalizeMySpot(null) === null);
+ok("normalize blank name -> default", C.normalizeMySpot({ id: "x", lat: 35, lng: 139, name: "   " }).name === "My smoking spot");
+ok("normalize missing name -> default", C.normalizeMySpot({ id: "x", lat: 35, lng: 139 }).name === "My smoking spot");
+ok("normalize trims name", C.normalizeMySpot({ id: "x", lat: 35, lng: 139, name: "  Alley  " }).name === "Alley");
+ok("normalize caps name length", C.normalizeMySpot({ id: "x", lat: 35, lng: 139, name: "z".repeat(200) }).name.length === C.MAX_SPOT_NAME);
+// a non-data URL in storage must never reach an <img src>
+ok("normalize rejects http photo", C.normalizeMySpot({ id: "x", lat: 35, lng: 139, photo: "http://evil/x.png" }).photo === null);
+ok("normalize rejects js photo", C.normalizeMySpot({ id: "x", lat: 35, lng: 139, photo: "javascript:alert(1)" }).photo === null);
+ok("normalize missing photo -> null", C.normalizeMySpot({ id: "x", lat: 35, lng: 139 }).photo === null);
+ok("normalize missing accuracy -> null", C.normalizeMySpot({ id: "x", lat: 35, lng: 139 }).accuracy === null);
+ok("normalize coerces numeric strings", C.normalizeMySpot({ id: "x", lat: "35.5", lng: "139.5" }).lat === 35.5);
+
+// parseMySpots — tolerant of anything localStorage might hold
+ok("parse round-trips", C.parseMySpots(C.serializeMySpots([good])).length === 1);
+ok("parse bad json -> []", C.parseMySpots("{not json").length === 0);
+ok("parse null -> []", C.parseMySpots(null).length === 0);
+ok("parse non-array -> []", C.parseMySpots('{"a":1}').length === 0);
+ok("parse drops invalid entries", C.parseMySpots('[{"id":"a","lat":35,"lng":139},{"lat":1}]').length === 1);
+ok("parse de-dupes by id", C.parseMySpots('[{"id":"a","lat":35,"lng":139},{"id":"a","lat":36,"lng":140}]').length === 1);
+
+// upsert / remove — immutable list operations
+const list0 = [];
+const list1 = C.upsertMySpot(list0, { id: "a", lat: 35, lng: 139, name: "A" });
+ok("upsert adds", list1.length === 1 && list1[0].name === "A");
+ok("upsert does not mutate input", list0.length === 0);
+const list2 = C.upsertMySpot(list1, { id: "b", lat: 36, lng: 140, name: "B" });
+ok("upsert appends second", list2.length === 2);
+const list3 = C.upsertMySpot(list2, { id: "a", lat: 35, lng: 139, name: "A renamed" });
+ok("upsert replaces same id", list3.length === 2);
+ok("upsert applies new value", list3.filter(s => s.id === "a")[0].name === "A renamed");
+ok("upsert rejects invalid spot", C.upsertMySpot(list2, { lat: 1 }).length === 2);
+ok("remove drops by id", C.removeMySpot(list2, "a").length === 1);
+ok("remove leaves others", C.removeMySpot(list2, "a")[0].id === "b");
+ok("remove unknown id is a no-op", C.removeMySpot(list2, "zzz").length === 2);
+ok("remove does not mutate input", list2.length === 2);
+
+// formatSavedAt — local time, stable regardless of the runner's timezone
+const stamp = new Date(2026, 7, 6, 14, 32).getTime(); // 2026-08-06 14:32 local
+ok("formatSavedAt local", C.formatSavedAt(stamp) === "2026-08-06 14:32");
+ok("formatSavedAt pads", C.formatSavedAt(new Date(2026, 0, 3, 9, 5).getTime()) === "2026-01-03 09:05");
+ok("formatSavedAt 0 -> empty", C.formatSavedAt(0) === "");
+
+// mySpotToMarker — renders through the same path as OSM spots
+const marker = C.mySpotToMarker(good);
+ok("marker category mine", marker.category === "mine");
+ok("marker mine flag", marker.mine === true);
+ok("marker carries photo", marker.photo === good.photo);
+ok("marker keeps coords", marker.lat === 35.66 && marker.lng === 139.7);
+ok("marker details has saved date", marker.details.some(d => /^Saved \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(d)));
+ok("marker details has accuracy", marker.details.some(d => d.includes("±8 m")));
+ok("marker details omit unknown accuracy", C.mySpotToMarker(C.normalizeMySpot({ id: "x", lat: 35, lng: 139 })).details.every(d => !d.includes("±")));
+// 'mine' must stay ours — OSM tags can never produce it
+ok("categorize never returns mine", C.categorize({ amenity: "smoking_area" }) !== "mine");
+
+// photoScaleDims — downscale to fit a box, preserve aspect, never upscale
+ok("scale landscape", JSON.stringify(C.photoScaleDims(4000, 3000, 720)) === JSON.stringify({ w: 720, h: 540 }));
+ok("scale portrait", JSON.stringify(C.photoScaleDims(3000, 4000, 720)) === JSON.stringify({ w: 540, h: 720 }));
+ok("scale square", JSON.stringify(C.photoScaleDims(2000, 2000, 720)) === JSON.stringify({ w: 720, h: 720 }));
+ok("scale leaves small image alone", JSON.stringify(C.photoScaleDims(300, 200, 720)) === JSON.stringify({ w: 300, h: 200 }));
+ok("scale never upscales", C.photoScaleDims(100, 100, 720).w === 100);
+ok("scale extreme panorama keeps >=1px", C.photoScaleDims(10000, 3, 720).h >= 1);
+ok("scale zero -> null", C.photoScaleDims(0, 100, 720) === null);
+ok("scale non-numeric -> null", C.photoScaleDims("x", 100, 720) === null);
+
+// sortMySpots — nearest-first with an origin, newest-first without
+const far = C.normalizeMySpot({ id: "far", lat: 35.70, lng: 139.75, savedAt: 3000 });
+const near = C.normalizeMySpot({ id: "near", lat: 35.6596, lng: 139.7006, savedAt: 1000 });
+const mid = C.normalizeMySpot({ id: "mid", lat: 35.67, lng: 139.71, savedAt: 2000 });
+const origin = { lat: 35.6595, lng: 139.7005 };
+ok("sort nearest first", C.sortMySpots([far, mid, near], origin).map(s => s.id).join(",") === "near,mid,far");
+ok("sort newest first w/o origin", C.sortMySpots([near, far, mid], null).map(s => s.id).join(",") === "far,mid,near");
+ok("sort does not mutate input", (() => { const src = [far, near]; C.sortMySpots(src, origin); return src[0].id === "far"; })());
+ok("sort empty is safe", C.sortMySpots([], origin).length === 0);
+
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

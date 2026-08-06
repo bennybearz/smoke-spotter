@@ -10,9 +10,38 @@ map, and hands you off to Apple/Google Maps for walking directions.
   - 🔵 **Official smoking area** (OpenStreetMap `amenity=smoking_area`)
   - 🟢 **Smoking-friendly venue** — cafe/bar/restaurant/etc. tagged `smoking=yes/dedicated/outside/...`
 - Pan and zoom freely; it reloads spots for whatever area you're looking at (zoom in to level 14+).
+  - 🟣 **Your own saved spot** — one you pinned yourself (see below)
 - Tap a spot → see its name, type, hours/details, distance from you, and two buttons:
   **Walk (Apple)** opens Apple Maps walking directions; **Google** opens Google Maps walking directions.
 - Installable to your iPhone home screen and launches full-screen like a native app.
+
+## Save your own spots
+Found a good one OSM doesn't know about? Tap the purple **＋** button (above the ◎
+button, bottom-right) to pin **where you're standing right now**:
+
+- It takes a fresh GPS fix, and tells you how accurate it is before you commit.
+- Give it a **name** ("Station east exit ashtray") and optionally a **photo** —
+  either a new one from the camera or an existing shot from your library.
+- Saved spots show as 🟣 purple pins with a ring, and their popup has the photo,
+  when you saved it, the GPS accuracy, walking directions, and a delete button.
+
+**Recall them** from the **"N saved spots"** row at the bottom of the legend: it
+lists everything you've pinned, nearest first, with a thumbnail and distance.
+Tap one to jump the map straight to it.
+
+They're stored on your phone in `localStorage`, which means:
+
+- They **work with no signal** — they load and display before any network call,
+  and survive the app being closed or reopened.
+- They **never leave your device** and are **not shared** between you, Alex and
+  Aaron. Each phone has its own list.
+- They're **per-browser**: pin them from the home-screen app and they won't show
+  in a normal Safari tab, and vice-versa. Clearing site data deletes them.
+
+Photos are downscaled to 720 px and re-encoded as JPEG before saving (roughly
+50–80 KB each) so a whole trip's worth fits in the ~5 MB `localStorage` budget.
+If storage does fill up, the app retries with a smaller image and finally saves
+the spot without its photo rather than losing the pin — and tells you it did.
 
 ## Data source & honesty note
 Data comes from **OpenStreetMap** via the free Overpass API. It is *not* CLUB JT's
@@ -61,6 +90,7 @@ In Japan you'll likely be on pocket-wifi or an eSIM, so the app minimizes data:
 
 ## Use it
 - Tap the **◎** button (bottom-right) anytime to recenter on your location.
+- Tap the **＋** button just above it to save the spot you're standing in.
 - Tap any colored dot for details and directions.
 - If you're standing somewhere with nothing nearby, pan the map — it searches wherever you look.
 
@@ -88,6 +118,12 @@ Where to make changes:
 - **Look & feel / map / UI** → `index.html` (all CSS and the Leaflet wiring are inline).
 - **What counts as a "spot", how data is parsed, the directions links** → `app-core.js`.
   Keep it dependency-free and add/extend a test in `test/core.test.js` for any logic change.
+- **Saved spots** → the storage format, validation and sorting are in `app-core.js`
+  (`parseMySpots`, `normalizeMySpot`, `upsertMySpot`, `photoScaleDims`, …) and unit-tested;
+  the camera/canvas/sheet wiring is in `index.html`. Two things are load-bearing:
+  saved pins live in their own `mineLayer` so an Overpass refresh (which calls
+  `markersLayer.clearLayers()`) can't wipe them, and `normalizeMySpot` only accepts
+  a `data:image/` URL for `photo`, so nothing else can reach an `<img src>`.
 - **Caching / offline / data budget** → `sw.js`. Bump the `SHELL_CACHE` version string when
   you change cached shell files so clients pick up the update.
 
@@ -96,14 +132,13 @@ plus `smoking=yes|dedicated|outside|isolated|separated`). Both are free third-pa
 please keep queries debounced so we stay polite to them.
 
 ## Tested
-- 28 unit tests on the data layer (query building, parsing nodes/ways, de-duping,
-  categorization, walking deep-links, distance) — all passing (`node test/core.test.js`).
+- 136 unit tests on the data layer (query building, parsing nodes/ways, de-duping,
+  categorization, walking deep-links, distance, Japan-aware geocoding, and the
+  saved-spot storage format) — all passing (`node test/core.test.js`).
 - JS syntax, manifest validity, asset references, and PWA tags verified.
-- On-device checks (live data, GPS prompt, map handoff, Add to Home Screen) confirm once hosted.
-
-## Tested
-- 28 unit tests on the data layer (query building, parsing nodes/ways, de-duping,
-  categorization, walking deep-links, distance) — all passing.
-- JS syntax, manifest validity, asset references, and PWA tags verified.
-- On-device checks (live data, GPS prompt, map handoff, Add to Home Screen) are quick
-  to confirm once it's hosted — see steps above.
+- The saved-spot flow is checked end-to-end in a real headless browser with a faked
+  GPS fix and **all third-party network blocked**: save with a photo → persists across
+  a reload → survives an Overpass refresh → recall from the list → delete. Corrupt
+  `localStorage` is checked too (the app must still load).
+- On-device checks (live data, GPS prompt, camera, map handoff, Add to Home Screen)
+  are quick to confirm once it's hosted — see steps above.
