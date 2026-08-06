@@ -192,6 +192,16 @@ Where to make changes:
 > instead of a spot count, and tapping it does nothing at all. The `?v=` makes each
 > release a distinct URL, so a stale copy simply can't be reached. `_headers` keeps
 > `index.html` and `sw.js` revalidated so the new `?v=` is always seen.
+>
+> A small guard at the top of `index.html` also **self-heals** a device that got
+> into this state *before* the fix existed — the `?v=` can't rescue a client that
+> is still serving a cached `index.html`, because it never fetches the new page.
+> The guard checks that the `app-core.js` it received actually provides the
+> functions the page needs, and if not clears the caches, unregisters the service
+> worker and reloads once. It never touches `localStorage`, so saved spots
+> survive, and a `sessionStorage` flag stops it ever looping. It's a capability
+> check rather than a version number on purpose: it can only fire when something
+> is genuinely missing, so it can't false-positive on a forgotten constant.
 
 Tile source is CARTO dark basemap; data source is the public Overpass API (`amenity=smoking_area`
 plus `smoking=yes|dedicated|outside|isolated|separated`). Both are free third-party services —
