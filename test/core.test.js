@@ -232,5 +232,137 @@ ok("sort newest first w/o origin", C.sortMySpots([near, far, mid], null).map(s =
 ok("sort does not mutate input", (() => { const src = [far, near]; C.sortMySpots(src, origin); return src[0].id === "far"; })());
 ok("sort empty is safe", C.sortMySpots([], origin).length === 0);
 
+// --- Cross-device sync ------------------------------------------------------
+
+// updatedAt / deleted / hasPhoto on the record
+const legacy = C.normalizeMySpot({ id: "old", lat: 35, lng: 139, savedAt: 5000 });
+ok("legacy record gets updatedAt from savedAt", legacy.updatedAt === 5000);
+ok("legacy record is not deleted", legacy.deleted === false);
+ok("explicit updatedAt wins", C.normalizeMySpot({ id: "a", lat: 35, lng: 139, savedAt: 1, updatedAt: 9 }).updatedAt === 9);
+ok("deleted flag from boolean", C.normalizeMySpot({ id: "a", lat: 35, lng: 139, deleted: true }).deleted === true);
+ok("deleted flag from 1 (SQLite)", C.normalizeMySpot({ id: "a", lat: 35, lng: 139, deleted: 1 }).deleted === true);
+ok("tombstone drops the photo", C.normalizeMySpot({ id: "a", lat: 35, lng: 139, deleted: true, photo: "data:image/jpeg;base64,AA" }).photo === null);
+ok("tombstone has no hasPhoto", C.normalizeMySpot({ id: "a", lat: 35, lng: 139, deleted: true, hasPhoto: true }).hasPhoto === false);
+ok("holding a photo implies hasPhoto", C.normalizeMySpot({ id: "a", lat: 35, lng: 139, photo: "data:image/jpeg;base64,AA" }).hasPhoto === true);
+ok("hasPhoto without bytes is kept", C.normalizeMySpot({ id: "a", lat: 35, lng: 139, hasPhoto: true }).hasPhoto === true);
+ok("hasPhoto from 1 (SQLite)", C.normalizeMySpot({ id: "a", lat: 35, lng: 139, hasPhoto: 1 }).hasPhoto === true);
+
+// activeSpots / markSpotDeleted / purgeTombstones
+const mixed = [
+  C.normalizeMySpot({ id: "a", lat: 35, lng: 139, savedAt: 1 }),
+  C.normalizeMySpot({ id: "b", lat: 35, lng: 139, savedAt: 2, deleted: true, updatedAt: 2 }),
+];
+ok("activeSpots hides tombstones", C.activeSpots(mixed).length === 1);
+ok("activeSpots keeps the live one", C.activeSpots(mixed)[0].id === "a");
+ok("activeSpots empty is safe", C.activeSpots([]).length === 0);
+const deleted = C.markSpotDeleted([C.normalizeMySpot({ id: "a", lat: 35, lng: 139, savedAt: 1, photo: "data:image/jpeg;base64,AA" })], "a", 999);
+ok("markSpotDeleted tombstones", deleted[0].deleted === true);
+ok("markSpotDeleted stamps updatedAt", deleted[0].updatedAt === 999);
+ok("markSpotDeleted drops the photo", deleted[0].photo === null);
+ok("markSpotDeleted clears hasPhoto", deleted[0].hasPhoto === false);
+ok("markSpotDeleted keeps the row", deleted.length === 1);
+ok("markSpotDeleted ignores other ids", C.markSpotDeleted(mixed, "zzz", 999).filter(s => s.deleted).length === 1);
+const DAY = 24 * 60 * 60 * 1000;
+const tombs = [
+  C.normalizeMySpot({ id: "fresh", lat: 35, lng: 139, deleted: true, updatedAt: 100 * DAY }),
+  C.normalizeMySpot({ id: "stale", lat: 35, lng: 139, deleted: true, updatedAt: 1 * DAY }),
+  C.normalizeMySpot({ id: "live", lat: 35, lng: 139, updatedAt: 1 * DAY }),
+];
+const purged = C.purgeTombstones(tombs, 101 * DAY, 45 * DAY);
+ok("purge drops old tombstones", !purged.some(s => s.id === "stale"));
+ok("purge keeps recent tombstones", purged.some(s => s.id === "fresh"));
+ok("purge never drops live spots", purged.some(s => s.id === "live"));
+
+// Trip codes
+ok("trip code lowercases", C.normalizeTripCode("  Boys-Trip-2026 ") === "boys-trip-2026");
+ok("trip code spaces -> dashes", C.normalizeTripCode("boys trip 2026") === "boys-trip-2026");
+ok("trip code strips punctuation", C.normalizeTripCode("boys_trip!!2026") === "boystrip2026");
+ok("trip code collapses dashes", C.normalizeTripCode("a---b") === "a-b");
+ok("trip code trims dashes", C.normalizeTripCode("-abcdef-") === "abcdef");
+ok("valid code accepted", C.isValidTripCode("boys-trip-2026") === true);
+ok("6 chars is the minimum", C.isValidTripCode("abcdef") === true);
+ok("5 chars rejected", C.isValidTripCode("abcde") === false);
+ok("empty rejected", C.isValidTripCode("") === false);
+ok("over-long rejected", C.isValidTripCode("a".repeat(41)) === false);
+ok("code cannot start with a dash", C.isValidTripCode("-abcdef") === true); // normalizes to abcdef
+ok("suggested code is valid", C.isValidTripCode(C.suggestTripCode(0.123456)) === true);
+ok("suggested code is deterministic", C.suggestTripCode(0.5) === C.suggestTripCode(0.5));
+ok("suggested code varies", C.suggestTripCode(0.5) !== C.suggestTripCode(0.6));
+ok("suggested code valid for tiny rand", C.isValidTripCode(C.suggestTripCode(0.0000001)) === true);
+
+// mergeSpotLists — last write wins
+const mkS = (o) => C.normalizeMySpot(Object.assign({ lat: 35, lng: 139 }, o));
+const localA = mkS({ id: "a", name: "local", updatedAt: 100 });
+const remoteA = mkS({ id: "a", name: "remote", updatedAt: 200 });
+ok("newer remote wins", C.mergeSpotLists([localA], [remoteA])[0].name === "remote");
+ok("newer local wins", C.mergeSpotLists([remoteA], [mkS({ id: "a", name: "local", updatedAt: 300 })])[0].name === "local");
+ok("older remote loses", C.mergeSpotLists([remoteA], [mkS({ id: "a", name: "old", updatedAt: 1 })])[0].name === "remote");
+ok("merge unions distinct ids", C.mergeSpotLists([mkS({ id: "a", updatedAt: 1 })], [mkS({ id: "b", updatedAt: 1 })]).length === 2);
+ok("merge of empties is empty", C.mergeSpotLists([], []).length === 0);
+ok("merge tolerates null args", C.mergeSpotLists(null, null).length === 0);
+ok("merge drops invalid records", C.mergeSpotLists([{ nope: 1 }], [mkS({ id: "b", updatedAt: 1 })]).length === 1);
+
+// merge: a delete must win a tie, or two devices flap forever
+const tieLive = mkS({ id: "a", name: "alive", updatedAt: 500 });
+const tieDead = mkS({ id: "a", updatedAt: 500, deleted: true });
+ok("delete wins a tie (remote dead)", C.mergeSpotLists([tieLive], [tieDead])[0].deleted === true);
+ok("delete wins a tie (local dead)", C.mergeSpotLists([tieDead], [tieLive])[0].deleted === true);
+ok("a newer undelete still wins", C.mergeSpotLists([tieDead], [mkS({ id: "a", updatedAt: 600 })])[0].deleted === false);
+
+// merge: a metadata-only pull must never erase a photo we already hold
+const withPhoto = mkS({ id: "a", updatedAt: 100, photo: "data:image/jpeg;base64,KEEPME" });
+const newerMeta = mkS({ id: "a", name: "renamed", updatedAt: 200, hasPhoto: true }); // no bytes
+const mergedPhoto = C.mergeSpotLists([withPhoto], [newerMeta])[0];
+ok("newer metadata wins on fields", mergedPhoto.name === "renamed");
+ok("but the local photo survives", mergedPhoto.photo === "data:image/jpeg;base64,KEEPME");
+ok("and hasPhoto stays true", mergedPhoto.hasPhoto === true);
+// the reverse: we hold no photo, remote says one exists
+const learnsPhoto = C.mergeSpotLists([mkS({ id: "a", updatedAt: 100 })], [mkS({ id: "a", updatedAt: 200, hasPhoto: true })])[0];
+ok("learns a photo exists elsewhere", learnsPhoto.hasPhoto === true && learnsPhoto.photo === null);
+// a tombstone still clears the photo even though we hold bytes
+ok("tombstone beats a held photo", C.mergeSpotLists([withPhoto], [mkS({ id: "a", updatedAt: 300, deleted: true })])[0].photo === null);
+
+// pickDirty / stripPhotos
+const pool = [mkS({ id: "a", updatedAt: 1 }), mkS({ id: "b", updatedAt: 1 }), mkS({ id: "c", updatedAt: 1 })];
+ok("pickDirty selects by id", C.pickDirty(pool, ["a", "c"]).map(s => s.id).join(",") === "a,c");
+ok("pickDirty ignores unknown ids", C.pickDirty(pool, ["zz"]).length === 0);
+ok("pickDirty empty is safe", C.pickDirty(pool, []).length === 0);
+ok("stripPhotos nulls the bytes", C.stripPhotos([withPhoto])[0].photo === null);
+ok("stripPhotos keeps hasPhoto", C.stripPhotos([withPhoto])[0].hasPhoto === true);
+ok("stripPhotos does not mutate", withPhoto.photo !== null);
+
+// URLs
+const pu = C.syncPullUrl("Boys Trip 2026", 1234);
+ok("pull url normalizes the code", pu.includes("trip=boys-trip-2026"));
+ok("pull url carries the cursor", pu.includes("since=1234"));
+ok("pull url is relative", pu.startsWith("api/spots?"));
+ok("pull url floors a bad cursor", C.syncPullUrl("abcdef", "nope").includes("since=0"));
+ok("photo url encodes the id", C.syncPhotoUrl("abcdef", "mine-a b").includes("id=mine-a%20b"));
+
+// parsePullResponse
+const good2 = C.parsePullResponse({ ok: true, now: 777, spots: [{ id: "a", lat: 35, lng: 139, updatedAt: 5 }] });
+ok("parse pull returns spots", good2.spots.length === 1);
+ok("parse pull returns now", good2.now === 777);
+ok("parse pull normalizes rows", good2.spots[0].hasPhoto === false);
+ok("parse pull rejects ok:false", C.parsePullResponse({ ok: false, spots: [] }) === null);
+ok("parse pull rejects missing spots", C.parsePullResponse({ ok: true }) === null);
+ok("parse pull rejects null", C.parsePullResponse(null) === null);
+ok("parse pull drops bad rows", C.parsePullResponse({ ok: true, now: 1, spots: [{ nope: 1 }] }).spots.length === 0);
+ok("parse pull tolerates bad now", C.parsePullResponse({ ok: true, now: "x", spots: [] }).now === 0);
+
+// A full round trip: save -> sync -> delete on device B -> sync back to A
+let devA = [mkS({ id: "s1", name: "Ashtray", updatedAt: 1000, photo: "data:image/jpeg;base64,AA" })];
+let devB = C.mergeSpotLists([], C.stripPhotos(devA));          // B pulls metadata
+ok("round trip: B sees the spot", C.activeSpots(devB).length === 1);
+ok("round trip: B knows a photo exists", devB[0].hasPhoto === true);
+ok("round trip: B has no bytes yet", devB[0].photo === null);
+devB = C.markSpotDeleted(devB, "s1", 2000);                     // B deletes it
+devA = C.mergeSpotLists(devA, devB);                            // A pulls
+ok("round trip: delete reaches A", C.activeSpots(devA).length === 0);
+ok("round trip: A keeps the tombstone", devA.length === 1 && devA[0].deleted === true);
+ok("round trip: A's photo is cleared", devA[0].photo === null);
+// and A re-syncing must not resurrect it
+ok("round trip: no resurrection", C.activeSpots(C.mergeSpotLists(devA, devB)).length === 0);
+
 console.log(`\nRESULT: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

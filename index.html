@@ -248,6 +248,32 @@
     .spot-meta { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
     .empty-note { color: var(--muted); font-size: 13.5px; text-align: center;
                   padding: 22px 6px; line-height: 1.5; }
+    .spot-thumb.pending { color: var(--muted); }
+
+    /* sync */
+    .sync-dot { color: var(--mine); font-weight: 700; margin-left: 6px; }
+    .sync-row {
+      width: 100%; display: flex; align-items: center; gap: 8px; margin-top: 10px;
+      padding: 12px 2px; background: none; border: none; border-top: 1px solid rgba(255,255,255,.07);
+      color: var(--text); font: inherit; font-size: 14px; cursor: pointer; text-align: left;
+    }
+    .sync-row:active { background: rgba(255,255,255,.04); }
+    .sync-row-state { margin-left: auto; color: var(--muted); font-size: 13px; }
+    .sync-row-state.on { color: var(--business); }
+    .sync-off {
+      width: 100%; margin-top: 10px; padding: 11px 8px; border-radius: 12px;
+      border: 1px solid rgba(255,120,120,.28); background: transparent; color: #ff9a9a;
+      font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    }
+    .sync-off:active { background: rgba(255,120,120,.12); }
+    .sync-state { margin-top: 14px; min-height: 18px; }
+    .sync-state.err { color: #ff9a9a; }
+    .sync-state.ok { color: #5fe0ab; }
+    .pop-photo-pending {
+      width: 100%; max-width: 240px; height: 78px; border-radius: 10px; margin: 2px 0 8px;
+      background: #0d131c; color: var(--muted); font-size: 12px;
+      display: flex; align-items: center; justify-content: center;
+    }
   </style>
 </head>
 <body>
@@ -267,8 +293,12 @@
   <div class="legend">
     <div class="row"><span class="dot public"></span> Official smoking area</div>
     <div class="row"><span class="dot business"></span> Smoking-friendly venue</div>
-    <button class="row mine-row" id="mySpotsBtn" hidden aria-haspopup="dialog">
-      <span class="dot mine"></span> <span id="mySpotsCount">My spots</span> <span class="chev">›</span>
+    <!-- Always visible: it's also the only way in to the sync settings, which
+         you may well want to set up before saving anything. -->
+    <button class="row mine-row" id="mySpotsBtn" aria-haspopup="dialog">
+      <span class="dot mine"></span> <span id="mySpotsCount">My spots</span>
+      <span class="sync-dot" id="syncDot" hidden title="Sync is on">⇅</span>
+      <span class="chev">›</span>
     </button>
   </div>
 
@@ -312,8 +342,47 @@
     <h2 id="listSheetTitle">My saved spots</h2>
     <p class="hint">Tap one to jump to it on the map.</p>
     <ul class="spot-list" id="spotList"></ul>
+    <button type="button" class="sync-row" id="openSync">
+      <span>⇅ Sync across devices</span>
+      <span class="sync-row-state" id="syncRowState">Off</span>
+      <span class="chev">›</span>
+    </button>
     <div class="sheet-btns">
       <button type="button" class="btn-cancel" id="closeList">Close</button>
+    </div>
+  </div>
+
+  <!-- Sync settings -->
+  <div class="sheet" id="syncSheet" role="dialog" aria-modal="true" aria-labelledby="syncSheetTitle">
+    <div class="grabber"></div>
+    <h2 id="syncSheetTitle">Sync across devices</h2>
+    <p class="hint">
+      Everyone who enters the same trip code shares one list of saved spots.
+      Use it on your own phone and laptop to sync just yours, or share the code
+      with the others to pool them. Leave it off to keep spots on this device only.
+    </p>
+
+    <label for="tripCodeInput">Trip code</label>
+    <input type="text" id="tripCodeInput" maxlength="40" autocomplete="off"
+           autocapitalize="none" autocorrect="off" spellcheck="false"
+           enterkeyhint="done" placeholder="trip-9f3ka2xz" />
+    <p class="hint" id="syncCodeHint">
+      Letters, numbers and dashes, at least 6 characters. Anyone who knows the
+      code can see the list, so don't make it guessable.
+    </p>
+
+    <div class="sheet-btns">
+      <button type="button" class="btn-cancel" id="suggestCode">Suggest one</button>
+      <button type="button" class="btn-save" id="saveSync">Turn on sync</button>
+    </div>
+    <button type="button" class="sync-off" id="syncOff" hidden>
+      Turn sync off — keep these spots on this device
+    </button>
+
+    <p class="hint sync-state" id="syncState"></p>
+
+    <div class="sheet-btns">
+      <button type="button" class="btn-cancel" id="closeSync">Close</button>
     </div>
   </div>
 
@@ -389,9 +458,11 @@
         return '<div class="pop-detail">' + escapeHtml(d) + "</div>";
       }).join("");
       // normalizeMySpot() guarantees photo is a data: URL, never a remote one.
+      // hasPhoto without photo means another device took it and we haven't
+      // downloaded it yet — the sync pull omits photo bodies on purpose.
       var photo = spot.photo
         ? '<img class="pop-photo" src="' + escapeHtml(spot.photo) + '" alt="" />'
-        : "";
+        : (spot.hasPhoto ? '<div class="pop-photo-pending">Loading photo…</div>' : "");
       var del = spot.mine
         ? '<button type="button" class="pop-delete" data-delete-id="' +
           escapeHtml(spot.id) + '">Delete this spot</button>'
@@ -450,6 +521,13 @@
     var mySpotsBtn = document.getElementById("mySpotsBtn");
     var mySpotsCountEl = document.getElementById("mySpotsCount");
     var spotListEl = document.getElementById("spotList");
+    var syncSheet = document.getElementById("syncSheet");
+    var syncDot = document.getElementById("syncDot");
+    var tripCodeInput = document.getElementById("tripCodeInput");
+    var syncStateEl = document.getElementById("syncState");
+    var syncRowStateEl = document.getElementById("syncRowState");
+    var syncOffBtn = document.getElementById("syncOff");
+    var saveSyncBtn = document.getElementById("saveSync");
 
     function loadMySpots() {
       var raw = null;
@@ -470,7 +548,9 @@
 
     function renderMySpots() {
       mineLayer.clearLayers();
-      mySpots.forEach(function (s) {
+      // activeSpots(): tombstones stay in storage so deletes can sync, but they
+      // must never be drawn.
+      SmokeCore.activeSpots(mySpots).forEach(function (s) {
         var m = SmokeCore.mySpotToMarker(s);
         var marker = L.marker([m.lat, m.lng], { icon: pinIcon("mine"), zIndexOffset: 500 })
           .bindPopup(popupHtml(m), { closeButton: true, autoPan: false });
@@ -481,9 +561,27 @@
     }
 
     function refreshMySpotsButton() {
-      var n = mySpots.length;
-      mySpotsBtn.hidden = n === 0;
-      mySpotsCountEl.textContent = n === 1 ? "1 saved spot" : n + " saved spots";
+      var n = SmokeCore.activeSpots(mySpots).length;
+      mySpotsCountEl.textContent = n === 0
+        ? "My spots"
+        : (n === 1 ? "1 saved spot" : n + " saved spots");
+      syncDot.hidden = !tripCode;
+    }
+
+    // Refresh one marker's popup in place. Used when a lazily-fetched photo
+    // arrives: a full renderMySpots() would rebuild the layer and shut the
+    // popup the user is looking at.
+    function updateMarkerPopup(id) {
+      var s = mySpots.filter(function (x) { return x.id === id; })[0];
+      if (!s) return;
+      mineLayer.eachLayer(function (l) {
+        if (l.spotId !== id) return;
+        l.setPopupContent(popupHtml(SmokeCore.mySpotToMarker(s)));
+        // setPopupContent throws away the old DOM, taking the Delete button's
+        // click listener with it — bind the replacement.
+        var p = l.getPopup();
+        if (p && p.getElement()) bindPopupActions(p.getElement());
+      });
     }
 
     function openSheet(el) {
@@ -494,6 +592,7 @@
       backdrop.classList.remove("open");
       addSheet.classList.remove("open");
       listSheet.classList.remove("open");
+      syncSheet.classList.remove("open");
     }
 
     // Fresh GPS fix for the spot we're about to save. Resolves null (never
@@ -644,8 +743,10 @@
       saveBtn.disabled = true;
       commitSpot(spot).then(function (res) {
         mySpots = res.list;
+        markDirty(spot.id);
         renderMySpots();
         closeSheets();
+        syncNow();
         if (res.droppedPhoto) {
           toast("Spot saved, but the photo wouldn't fit in storage. Delete an older spot to free space.");
           setStatus("Saved “" + spot.name + "” (without photo)");
@@ -667,28 +768,43 @@
       if (e.key === "Escape") closeSheets();
     });
 
-    // Delete, from a saved spot's popup. Leaflet calls disableClickPropagation()
-    // on popup content, so clicks never reach document — bind on the element
-    // itself each time a popup opens.
-    map.on("popupopen", function (e) {
-      var el = e.popup.getElement();
+    // Wire up a saved spot's popup. Leaflet calls disableClickPropagation() on
+    // popup content, so clicks never reach document and we must bind on the
+    // element itself. This runs on popupopen AND again after setPopupContent
+    // (a lazily-fetched photo arriving), because that replaces the popup's DOM
+    // and would otherwise leave a dead Delete button behind.
+    function bindPopupActions(el) {
       var btn = el && el.querySelector(".pop-delete");
-      if (!btn) return;
+      if (!btn || btn.getAttribute("data-bound") === "1") return;
+      btn.setAttribute("data-bound", "1");
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-delete-id");
         if (!id || !window.confirm("Delete this saved spot?")) return;
-        var list = SmokeCore.removeMySpot(mySpots, id);
+        // Tombstone, not a hard delete: dropping the row outright would let the
+        // spot sync straight back from another device that hasn't heard yet.
+        var list = SmokeCore.markSpotDeleted(mySpots, id, Date.now());
         if (!persistMySpots(list)) { toast("Couldn't update storage."); return; }
         mySpots = list;
+        markDirty(id);
         map.closePopup();
         renderMySpots();
         setStatus("Spot deleted");
+        syncNow();
       });
+    }
+
+    map.on("popupopen", function (e) {
+      var el = e.popup.getElement();
+      bindPopupActions(el);
+      var btn = el && el.querySelector(".pop-delete");
+      // Only saved spots have a delete button, and only they can have a photo
+      // waiting to be downloaded from another device.
+      if (btn) ensurePhoto(btn.getAttribute("data-delete-id"));
     });
 
     // The saved-spots list: nearest first when we know where you are.
     function renderSpotList() {
-      var sorted = SmokeCore.sortMySpots(mySpots, userLatLng);
+      var sorted = SmokeCore.sortMySpots(SmokeCore.activeSpots(mySpots), userLatLng);
       spotListEl.innerHTML = "";
       if (!sorted.length) {
         spotListEl.innerHTML = '<li class="empty-note">No saved spots yet.<br />Tap ＋ when you find a good one.</li>';
@@ -703,7 +819,10 @@
           '<button type="button" class="spot-item" data-goto-id="' + escapeHtml(s.id) + '">' +
             (s.photo
               ? '<img class="spot-thumb" src="' + escapeHtml(s.photo) + '" alt="" />'
-              : '<span class="spot-thumb empty">🚬</span>') +
+              // A photo taken on another device isn't downloaded until you open
+              // the spot, so flag it rather than pulling every thumbnail.
+              : '<span class="spot-thumb empty' + (s.hasPhoto ? " pending" : "") + '">' +
+                (s.hasPhoto ? "📷" : "🚬") + "</span>") +
             '<span class="spot-text">' +
               '<span class="spot-name">' + escapeHtml(s.name) + "</span>" +
               '<span class="spot-meta">' + escapeHtml(meta.join(" · ")) + "</span>" +
@@ -712,6 +831,236 @@
         spotListEl.appendChild(li);
       });
     }
+
+    // ---- Cross-device sync -------------------------------------------------
+    // localStorage stays the source of truth for what's on screen; the server is
+    // a background mirror. Nothing here ever blocks the map, and every failure
+    // is non-fatal — the app has to keep working with no signal.
+
+    var PUSH_CHUNK = 20;        // spots per POST; photos make bodies large
+    var SYNC_THROTTLE_MS = 20000;
+    var tripCode = "";
+    var syncCursor = 0;
+    var dirtyIds = {};
+    var syncing = false;
+    var syncInFlight = null;
+    var lastSyncAt = 0;
+    var lastSyncError = "";
+    var photoFetches = {};
+
+    function loadSyncState() {
+      try {
+        tripCode = SmokeCore.normalizeTripCode(localStorage.getItem(SmokeCore.TRIP_CODE_KEY) || "");
+        if (!SmokeCore.isValidTripCode(tripCode)) tripCode = "";
+        syncCursor = Number(localStorage.getItem(SmokeCore.SYNC_CURSOR_KEY)) || 0;
+        var d = JSON.parse(localStorage.getItem(SmokeCore.DIRTY_KEY) || "[]");
+        dirtyIds = {};
+        if (Array.isArray(d)) d.forEach(function (id) { dirtyIds[String(id)] = true; });
+      } catch (e) {
+        tripCode = ""; syncCursor = 0; dirtyIds = {};
+      }
+    }
+
+    function saveSyncState() {
+      try {
+        localStorage.setItem(SmokeCore.TRIP_CODE_KEY, tripCode);
+        localStorage.setItem(SmokeCore.SYNC_CURSOR_KEY, String(syncCursor));
+        localStorage.setItem(SmokeCore.DIRTY_KEY, JSON.stringify(Object.keys(dirtyIds)));
+      } catch (e) {}
+    }
+
+    // Queue a local change for upload. Tracked by id rather than by timestamp so
+    // that pulling a record back doesn't look like a local edit and echo again.
+    function markDirty(id) {
+      dirtyIds[id] = true;
+      saveSyncState();
+    }
+
+    function pushDirty() {
+      var pending = SmokeCore.pickDirty(mySpots, Object.keys(dirtyIds));
+      if (!pending.length) { dirtyIds = {}; saveSyncState(); return Promise.resolve(); }
+
+      function sendChunk(i) {
+        if (i >= pending.length) return Promise.resolve();
+        var chunk = pending.slice(i, i + PUSH_CHUNK);
+        return fetch("api/spots", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ trip: tripCode, spots: chunk })
+        }).then(function (r) {
+          if (!r.ok) throw new Error("upload failed (" + r.status + ")");
+          return r.json();
+        }).then(function (j) {
+          if (!j || j.ok !== true) throw new Error("upload rejected");
+          chunk.forEach(function (s) { delete dirtyIds[s.id]; });
+          saveSyncState();
+          return sendChunk(i + PUSH_CHUNK);
+        });
+      }
+      return sendChunk(0);
+    }
+
+    // Pull changes since our cursor, newest wins. Loops while the server says
+    // there are more pages, with a hard cap so a bad response can't spin.
+    function pullChanges(round) {
+      round = round || 0;
+      return fetch(SmokeCore.syncPullUrl(tripCode, syncCursor), {
+        headers: { "Accept": "application/json" }
+      }).then(function (r) {
+        if (!r.ok) throw new Error("download failed (" + r.status + ")");
+        return r.json();
+      }).then(function (j) {
+        var parsed = SmokeCore.parsePullResponse(j);
+        if (!parsed) throw new Error("download rejected");
+        var changed = false;
+        if (parsed.spots.length) {
+          mySpots = SmokeCore.purgeTombstones(
+            SmokeCore.mergeSpotLists(mySpots, parsed.spots),
+            Date.now(), SmokeCore.TOMBSTONE_TTL_MS
+          );
+          persistMySpots(mySpots);
+          changed = true;
+        }
+        if (parsed.now) { syncCursor = parsed.now; }
+        saveSyncState();
+        if (j.more === true && round < 20) {
+          return pullChanges(round + 1).then(function (more) { return changed || more; });
+        }
+        return changed;
+      });
+    }
+
+    function runSyncOnce() {
+      syncing = true;
+      lastSyncError = "";
+      refreshSyncUi();
+      return pushDirty()
+        .then(pullChanges)
+        .then(function (changed) {
+          syncing = false;
+          lastSyncAt = Date.now();
+          if (changed) { renderMySpots(); if (listSheet.classList.contains("open")) renderSpotList(); }
+          refreshSyncUi();
+          return true;
+        })
+        .catch(function (err) {
+          syncing = false;
+          lastSyncError = (err && err.message) || "sync failed";
+          refreshSyncUi();
+          return false;
+        });
+    }
+
+    // Never drop a requested sync. A run already in flight may have snapshotted
+    // the dirty list before this change was made — saving two spots quickly
+    // would then strand the second one until the next foreground. Chain a
+    // second pass instead, so awaiting this always means "my change is pushed".
+    function syncNow() {
+      if (!tripCode) return Promise.resolve(false);
+      if (syncInFlight) return syncInFlight.then(function () { return syncNow(); });
+      syncInFlight = runSyncOnce().then(function (r) { syncInFlight = null; return r; });
+      return syncInFlight;
+    }
+
+    // Photos are excluded from the pull (they're ~99% of the bytes), so fetch
+    // one on demand the first time its spot is opened, then keep it locally.
+    function ensurePhoto(id) {
+      if (!tripCode || photoFetches[id]) return;
+      var spot = mySpots.filter(function (x) { return x.id === id; })[0];
+      if (!spot || spot.photo || !spot.hasPhoto || spot.deleted) return;
+      photoFetches[id] = true;
+      fetch(SmokeCore.syncPhotoUrl(tripCode, id), { headers: { "Accept": "application/json" } })
+        .then(function (r) { if (!r.ok) throw new Error("no photo"); return r.json(); })
+        .then(function (j) {
+          if (!j || j.ok !== true || typeof j.photo !== "string") throw new Error("bad photo");
+          mySpots = mySpots.map(function (s) {
+            if (s.id !== id) return s;
+            var c = SmokeCore.normalizeMySpot(Object.assign({}, s, { photo: j.photo }));
+            return c || s;
+          });
+          persistMySpots(mySpots);
+          updateMarkerPopup(id);
+        })
+        .catch(function () {})
+        .then(function () { delete photoFetches[id]; });
+    }
+
+    function refreshSyncUi() {
+      syncDot.hidden = !tripCode;
+      syncRowStateEl.textContent = tripCode ? "On" : "Off";
+      syncRowStateEl.classList.toggle("on", !!tripCode);
+      syncOffBtn.hidden = !tripCode;
+      saveSyncBtn.textContent = tripCode ? "Update code" : "Turn on sync";
+
+      var msg, cls = "";
+      if (!tripCode) {
+        msg = "Off — spots stay on this device.";
+      } else if (syncing) {
+        msg = "Syncing…";
+      } else if (lastSyncError) {
+        msg = "Couldn't sync: " + lastSyncError + ". Your spots are safe on this device; it'll retry.";
+        cls = "err";
+      } else if (lastSyncAt) {
+        msg = "Synced at " + SmokeCore.formatSavedAt(lastSyncAt).slice(11) + " · code “" + tripCode + "”";
+        cls = "ok";
+      } else {
+        msg = "Sync is on · code “" + tripCode + "”";
+      }
+      syncStateEl.textContent = msg;
+      syncStateEl.className = "hint sync-state" + (cls ? " " + cls : "");
+    }
+
+    function openSyncSheet() {
+      tripCodeInput.value = tripCode;
+      refreshSyncUi();
+      openSheet(syncSheet);
+    }
+
+    document.getElementById("openSync").addEventListener("click", openSyncSheet);
+    document.getElementById("closeSync").addEventListener("click", closeSheets);
+
+    document.getElementById("suggestCode").addEventListener("click", function () {
+      tripCodeInput.value = SmokeCore.suggestTripCode(Math.random());
+    });
+
+    saveSyncBtn.addEventListener("click", function () {
+      var code = SmokeCore.normalizeTripCode(tripCodeInput.value);
+      if (!SmokeCore.isValidTripCode(code)) {
+        toast("That code is too short. Use at least 6 letters, numbers or dashes.");
+        return;
+      }
+      var switching = code !== tripCode;
+      tripCode = code;
+      if (switching) {
+        // New bucket: we've no idea what it holds, and it's never seen what we
+        // hold. Re-read from the start and re-upload everything we have.
+        syncCursor = 0;
+        mySpots.forEach(function (s) { dirtyIds[s.id] = true; });
+      }
+      saveSyncState();
+      refreshSyncUi();
+      setStatus("Sync on — code “" + tripCode + "”");
+      syncNow();
+    });
+
+    syncOffBtn.addEventListener("click", function () {
+      if (!window.confirm("Turn sync off? Spots stay on this device, and stop syncing to the others.")) return;
+      tripCode = "";
+      syncCursor = 0;
+      dirtyIds = {};
+      saveSyncState();
+      refreshSyncUi();
+      refreshMySpotsButton();
+      setStatus("Sync off");
+    });
+
+    // Catch up when the app comes back to the foreground — that's when someone
+    // else's spot from earlier in the day actually shows up.
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastSyncAt < SYNC_THROTTLE_MS) return;
+      syncNow();
+    });
 
     mySpotsBtn.addEventListener("click", function () {
       renderSpotList();
@@ -897,9 +1246,14 @@
     }
 
     // Draw any previously saved spots immediately — they come from localStorage,
-    // so they're on the map before (and without) any network call.
+    // so they're on the map before (and without) any network call. Sync then
+    // happens in the background and redraws only if it actually changed anything.
+    loadSyncState();
     loadMySpots();
+    mySpots = SmokeCore.purgeTombstones(mySpots, Date.now(), SmokeCore.TOMBSTONE_TTL_MS);
     renderMySpots();
+    refreshSyncUi();
+    syncNow();
 
     // Auto-try location on first load (will prompt for permission).
     setTimeout(locate, 600);
