@@ -387,7 +387,12 @@
   </div>
 
   <script src="vendor/leaflet.js"></script>
-  <script src="app-core.js"></script>
+  <!-- ?v= is a cache buster and must be bumped whenever app-core.js changes
+       (same time you bump SHELL_CACHE in sw.js). Without it the browser can
+       serve a cached app-core.js alongside a freshly-fetched index.html; the
+       two then disagree about what SmokeCore exports and the app dies on the
+       first call to a function the old file doesn't have. -->
+  <script src="app-core.js?v=10"></script>
   <script>
     var OVERPASS_ENDPOINTS = [
       "https://overpass-api.de/api/interpreter",
