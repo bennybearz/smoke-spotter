@@ -261,13 +261,25 @@
   // localStorage so they survive a reload and work with no network. Kept here,
   // away from the DOM, so the storage format is unit-tested.
   //
-  // Record shape: { id, lat, lng, name, photo, savedAt, accuracy }
-  //   photo    = a data: URL (already downscaled by the page), or null
-  //   savedAt  = epoch ms
-  //   accuracy = GPS accuracy in metres, or null if unknown
+  // Record shape:
+  //   { id, lat, lng, name, photo, hasPhoto, savedAt, accuracy, updatedAt, deleted }
+  //   photo     = a data: URL (already downscaled by the page), or null
+  //   hasPhoto  = a photo exists somewhere, even if this device hasn't fetched
+  //               it yet — the sync pull deliberately omits photo bodies
+  //   savedAt   = epoch ms the spot was first pinned
+  //   accuracy  = GPS accuracy in metres, or null if unknown
+  //   updatedAt = epoch ms of the last change; the last-write-wins sync key
+  //   deleted   = tombstone. Deletes have to be recorded rather than dropped,
+  //               or another device would just sync the spot back.
 
   var MY_SPOTS_KEY = "smokespotter.mySpots.v1";
+  var TRIP_CODE_KEY = "smokespotter.tripCode.v1";
+  var SYNC_CURSOR_KEY = "smokespotter.syncCursor.v1";
+  var DIRTY_KEY = "smokespotter.dirty.v1";
   var MAX_SPOT_NAME = 80;
+  // How long a tombstone is kept before being purged. Long enough that a phone
+  // left in a drawer for a month still learns about the delete.
+  var TOMBSTONE_TTL_MS = 45 * 24 * 60 * 60 * 1000;
 
   // Deterministic given its inputs, so it can be tested. The page passes
   // Date.now() and Math.random().
@@ -294,14 +306,24 @@
     var savedAt = Number(raw.savedAt);
     if (!isFinite(savedAt) || savedAt <= 0) savedAt = 0;
     var acc = Number(raw.accuracy);
+    // Records written before sync existed have no updatedAt; treat the moment
+    // they were saved as their last change so they merge sanely.
+    var updatedAt = Number(raw.updatedAt);
+    if (!isFinite(updatedAt) || updatedAt <= 0) updatedAt = savedAt;
+    var deleted = raw.deleted === true || raw.deleted === 1;
     return {
       id: id,
       lat: lat,
       lng: lng,
       name: name,
-      photo: photo,
+      photo: deleted ? null : photo,
+      // A pulled record carries hasPhoto without the bytes; holding a photo
+      // implies it too.
+      hasPhoto: deleted ? false : (!!photo || raw.hasPhoto === true || raw.hasPhoto === 1),
       savedAt: savedAt,
       accuracy: isFinite(acc) && acc >= 0 ? Math.round(acc) : null,
+      updatedAt: updatedAt,
+      deleted: deleted,
     };
   }
 
@@ -373,6 +395,7 @@
       name: s.name,
       details: mySpotDetails(s),
       photo: s.photo,
+      hasPhoto: s.hasPhoto,
       savedAt: s.savedAt,
       mine: true,
     };
@@ -401,6 +424,134 @@
       out.sort(function (a, b) { return (b.savedAt || 0) - (a.savedAt || 0); });
     }
     return out;
+  }
+
+  // --- Cross-device sync -----------------------------------------------------
+  // Spots live in localStorage and are mirrored to a shared "trip" bucket, so
+  // the same list shows up on your phone and your laptop. The local copy stays
+  // the source of truth for rendering: the map must work with no signal, so the
+  // network is a background mirror, never something the UI waits on.
+
+  function cloneSpot(s) {
+    var out = {};
+    for (var k in s) if (Object.prototype.hasOwnProperty.call(s, k)) out[k] = s[k];
+    return out;
+  }
+
+  // Tombstones are kept in storage but never shown.
+  function activeSpots(list) {
+    return (list || []).filter(function (s) { return !s.deleted; });
+  }
+
+  // Soft delete. Drops the photo (a tombstone needs no bytes) and stamps
+  // updatedAt so the delete beats the older record on other devices.
+  function markSpotDeleted(list, id, now) {
+    return (list || []).map(function (s) {
+      if (s.id !== id) return s;
+      var t = cloneSpot(s);
+      t.deleted = true;
+      t.photo = null;
+      t.hasPhoto = false;
+      t.updatedAt = Number(now) || 0;
+      return t;
+    });
+  }
+
+  function purgeTombstones(list, now, ttlMs) {
+    var ttl = isFinite(ttlMs) ? ttlMs : TOMBSTONE_TTL_MS;
+    return (list || []).filter(function (s) {
+      return !s.deleted || (Number(now) || 0) - (s.updatedAt || 0) < ttl;
+    });
+  }
+
+  // Trip codes are the only secret protecting a bucket, so they're normalised
+  // to one canonical form and required to be long enough not to be guessed.
+  var TRIP_CODE_RE = /^[a-z0-9][a-z0-9-]{5,39}$/;
+
+  function normalizeTripCode(str) {
+    return String(str || "").trim().toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/[^a-z0-9-]/g, "")
+      .replace(/-{2,}/g, "-")
+      .replace(/^-+|-+$/g, "");
+  }
+
+  function isValidTripCode(str) {
+    return TRIP_CODE_RE.test(normalizeTripCode(str));
+  }
+
+  // Deterministic given `rand`, so it can be tested.
+  function suggestTripCode(rand) {
+    var r = Math.floor(Math.abs(Number(rand) || 0) * 1e12).toString(36);
+    while (r.length < 8) r = "0" + r;
+    return "trip-" + r.slice(0, 8);
+  }
+
+  // Last-write-wins union of two lists, keyed by id.
+  // Two subtleties this has to get right:
+  //   1. A pulled record has hasPhoto but no photo bytes. If it wins purely on
+  //      updatedAt we must NOT let that erase a photo this device already holds.
+  //   2. On an exact updatedAt tie a delete wins, otherwise a spot deleted on
+  //      one device could flap back and forth between two devices forever.
+  function mergeSpotLists(local, remote) {
+    var byId = {};
+    var order = [];
+    function put(raw) {
+      var n = normalizeMySpot(raw);
+      if (!n) return;
+      var cur = byId[n.id];
+      if (!cur) { byId[n.id] = n; order.push(n.id); return; }
+      var takeNew = n.updatedAt > cur.updatedAt ||
+        (n.updatedAt === cur.updatedAt && n.deleted && !cur.deleted);
+      var winner = takeNew ? n : cur;
+      var other = takeNew ? cur : n;
+      var merged = cloneSpot(winner);
+      if (!merged.photo && merged.hasPhoto && other.photo) merged.photo = other.photo;
+      if (other.hasPhoto && !merged.deleted) merged.hasPhoto = true;
+      byId[n.id] = merged;
+    }
+    (local || []).forEach(put);
+    (remote || []).forEach(put);
+    return order.map(function (id) { return byId[id]; });
+  }
+
+  // Records this device has changed and not yet pushed.
+  function pickDirty(list, ids) {
+    var want = {};
+    (ids || []).forEach(function (id) { want[id] = true; });
+    return (list || []).filter(function (s) { return want[s.id]; });
+  }
+
+  // The push carries photos (the device that took one is the only source of it).
+  // The pull deliberately does not — see syncPullUrl.
+  function stripPhotos(list) {
+    return (list || []).map(function (s) {
+      var c = cloneSpot(s);
+      c.photo = null;
+      return c;
+    });
+  }
+
+  function syncPullUrl(trip, since) {
+    return "api/spots?trip=" + encodeURIComponent(normalizeTripCode(trip)) +
+      "&since=" + (Math.floor(Number(since)) || 0);
+  }
+
+  function syncPhotoUrl(trip, id) {
+    return "api/photo?trip=" + encodeURIComponent(normalizeTripCode(trip)) +
+      "&id=" + encodeURIComponent(id);
+  }
+
+  // Returns { spots, now } or null if the response is unusable.
+  function parsePullResponse(json) {
+    if (!json || json.ok !== true || !Array.isArray(json.spots)) return null;
+    var now = Number(json.now);
+    var spots = [];
+    json.spots.forEach(function (r) {
+      var n = normalizeMySpot(r);
+      if (n) spots.push(n);
+    });
+    return { spots: spots, now: isFinite(now) && now > 0 ? now : 0 };
   }
 
   // Haversine distance in metres, for "X m away" in popups.
@@ -461,6 +612,23 @@
     mySpotToMarker: mySpotToMarker,
     photoScaleDims: photoScaleDims,
     sortMySpots: sortMySpots,
+    // cross-device sync
+    TRIP_CODE_KEY: TRIP_CODE_KEY,
+    SYNC_CURSOR_KEY: SYNC_CURSOR_KEY,
+    DIRTY_KEY: DIRTY_KEY,
+    TOMBSTONE_TTL_MS: TOMBSTONE_TTL_MS,
+    activeSpots: activeSpots,
+    markSpotDeleted: markSpotDeleted,
+    purgeTombstones: purgeTombstones,
+    normalizeTripCode: normalizeTripCode,
+    isValidTripCode: isValidTripCode,
+    suggestTripCode: suggestTripCode,
+    mergeSpotLists: mergeSpotLists,
+    pickDirty: pickDirty,
+    stripPhotos: stripPhotos,
+    syncPullUrl: syncPullUrl,
+    syncPhotoUrl: syncPhotoUrl,
+    parsePullResponse: parsePullResponse,
   };
 
   if (typeof module !== "undefined" && module.exports) {

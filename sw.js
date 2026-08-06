@@ -2,7 +2,7 @@
    - App shell + Leaflet are self-hosted and cached: downloaded once, then free/offline.
    - Map tiles are cached (cache-first, capped) so re-walking an area doesn't re-download.
    - Overpass data is always fetched fresh from the network (never cached). */
-var SHELL_CACHE = "smoke-shell-v8";
+var SHELL_CACHE = "smoke-shell-v9";
 var TILE_CACHE = "smoke-tiles-v1";
 var TILE_MAX = 400; // ~ a few MB; plenty for a day of walking a neighborhood
 
@@ -51,6 +51,13 @@ self.addEventListener("fetch", function (e) {
 
   // Overpass data: always network, never cache (we want fresh results).
   if (/overpass/.test(url.hostname) || /interpreter/.test(url.pathname)) {
+    return;
+  }
+
+  // Sync API: always network, never cache. The app-shell rule below is
+  // cache-first, which would pin the first sync response forever and make the
+  // list look frozen on every device but the one that wrote it.
+  if (url.pathname.indexOf("/api/") === 0 || /\/api\//.test(url.pathname)) {
     return;
   }
 

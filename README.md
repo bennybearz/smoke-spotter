@@ -29,14 +29,54 @@ button, bottom-right) to pin **where you're standing right now**:
 lists everything you've pinned, nearest first, with a thumbnail and distance.
 Tap one to jump the map straight to it.
 
-They're stored on your phone in `localStorage`, which means:
+They're stored on your phone in `localStorage`, so they **work with no signal** —
+they load and display before any network call, and survive the app being closed
+or reopened. By default they stay on that one device (and that one browser: the
+home-screen app and a normal Safari tab have separate storage). To share them,
+turn on sync — see below.
 
-- They **work with no signal** — they load and display before any network call,
-  and survive the app being closed or reopened.
-- They **never leave your device** and are **not shared** between you, Alex and
-  Aaron. Each phone has its own list.
-- They're **per-browser**: pin them from the home-screen app and they won't show
-  in a normal Safari tab, and vice-versa. Clearing site data deletes them.
+## Sync across devices (optional)
+Open **My spots → ⇅ Sync across devices**, enter a **trip code**, and every
+device using that code shares one list. There are no accounts and no passwords.
+
+- Use the same code on your own phone and laptop to sync **just yours**.
+- Give the code to Alex and Aaron to **pool everyone's** spots.
+- Leave it off and nothing leaves the device — that's the default.
+
+> ⚠️ The trip code is the only thing protecting the list. Anyone who knows it can
+> read and change it, so use the **Suggest one** button rather than something
+> guessable like `tokyo`. Minimum 6 characters.
+
+**Data use stays low, deliberately.** The sync pull carries only names, coordinates
+and dates — never photo data, which is ~99% of the bytes. A photo taken on someone
+else's phone shows a 📷 placeholder in the list and is downloaded only when you
+actually open that spot, then kept locally so it crosses the network once. Nothing
+in the app ever waits on the network: the map renders from local storage first and
+sync happens in the background.
+
+**Deletes are tombstones.** Deleting a spot records the deletion rather than just
+dropping it, so the delete travels to the other phones instead of the spot syncing
+straight back from a device that hadn't heard yet. Tombstones are purged after 45 days.
+
+### Setting up the backend (once)
+Sync needs a [Cloudflare D1](https://developers.cloudflare.com/d1/) database bound to
+the Pages project. Everything else is already in the repo (`functions/`, `schema.sql`).
+
+```bash
+npx wrangler d1 create smoke-spotter
+npx wrangler d1 execute smoke-spotter --remote --file=./schema.sql
+```
+
+Then in the Cloudflare dashboard: **Workers & Pages → your Pages project → Settings
+→ Bindings → Add → D1 database**, variable name **`DB`**, pointed at `smoke-spotter`.
+Add it for **both** Production and Preview, then redeploy. Until that binding exists
+the endpoints return **503** and the app just carries on working locally — sync is
+additive, and nothing breaks without it.
+
+**It stays free.** On Cloudflare's free tier D1 allows 5 GB of storage, 100,000 row
+writes and 5 million row reads per day, and Workers allow 100,000 requests per day.
+Three people on a two-week trip use a rounding error of that (a few megabytes and a
+few hundred requests), so there is no path to a bill.
 
 Photos are downscaled to 720 px and re-encoded as JPEG before saving (roughly
 50–80 KB each) so a whole trip's worth fits in the ~5 MB `localStorage` budget.
@@ -101,6 +141,9 @@ In Japan you'll likely be on pocket-wifi or an eSIM, so the app minimizes data:
 - `manifest.webmanifest`, `sw.js`, `icon-*.png` — PWA install + offline app shell.
 - `vendor/` — self-hosted Leaflet 1.9.4 (so there's no third-party CDN dependency).
 - `test/core.test.js` — data-layer unit tests.
+- `functions/` — the sync API, run by Cloudflare Pages Functions
+  (`api/spots.js` = pull/push, `api/photo.js` = one photo, `_shared.js` = validation).
+- `schema.sql` — the D1 table. Apply it once; see the setup steps above.
 
 ## Developer notes (Aaron 👋)
 No framework, no bundler, no build — it's a static site, so "deploy" is just serving these
@@ -124,21 +167,35 @@ Where to make changes:
   saved pins live in their own `mineLayer` so an Overpass refresh (which calls
   `markersLayer.clearLayers()`) can't wipe them, and `normalizeMySpot` only accepts
   a `data:image/` URL for `photo`, so nothing else can reach an `<img src>`.
+- **Sync** → merge rules, tombstones and trip codes are pure functions in `app-core.js`
+  (`mergeSpotLists`, `markSpotDeleted`, `purgeTombstones`, `parsePullResponse`, …) and
+  unit-tested; the fetch/queue wiring is in `index.html`; the server is `functions/`.
+  Two rules the merge has to keep: a delete wins an exact `updatedAt` tie (otherwise a
+  spot flaps between two devices forever), and a metadata-only pull must never erase a
+  photo the device already holds. The server re-validates everything independently —
+  never relax `functions/_shared.js` to match the client.
 - **Caching / offline / data budget** → `sw.js`. Bump the `SHELL_CACHE` version string when
-  you change cached shell files so clients pick up the update.
+  you change cached shell files so clients pick up the update. Note `/api/` is explicitly
+  excluded from caching: the app-shell rule is cache-first, which would otherwise pin the
+  first sync response forever and make the list look frozen.
 
 Tile source is CARTO dark basemap; data source is the public Overpass API (`amenity=smoking_area`
 plus `smoking=yes|dedicated|outside|isolated|separated`). Both are free third-party services —
 please keep queries debounced so we stay polite to them.
 
 ## Tested
-- 136 unit tests on the data layer (query building, parsing nodes/ways, de-duping,
-  categorization, walking deep-links, distance, Japan-aware geocoding, and the
-  saved-spot storage format) — all passing (`node test/core.test.js`).
+- 214 unit tests on the data layer (query building, parsing nodes/ways, de-duping,
+  categorization, walking deep-links, distance, Japan-aware geocoding, the saved-spot
+  storage format, and the sync merge rules) — all passing (`node test/core.test.js`).
 - JS syntax, manifest validity, asset references, and PWA tags verified.
 - The saved-spot flow is checked end-to-end in a real headless browser with a faked
   GPS fix and **all third-party network blocked**: save with a photo → persists across
   a reload → survives an Overpass refresh → recall from the list → delete. Corrupt
   `localStorage` is checked too (the app must still load).
+- Sync is checked with **two browser contexts against the real `functions/` code and
+  the real SQL**: save on device A → appears on device B → photo fetched lazily on open
+  → deleted on B → delete reaches A → and stays deleted when A re-uploads. Plus a
+  different trip code seeing nothing, and the server rejecting short codes, oversized
+  pushes, out-of-range coordinates and non-`data:` photo URLs.
 - On-device checks (live data, GPS prompt, camera, map handoff, Add to Home Screen)
   are quick to confirm once it's hosted — see steps above.
