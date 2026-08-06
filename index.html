@@ -27,6 +27,7 @@
       --muted: #9fb0c0;
       --public: #2e86ff;   /* official public smoking area */
       --business: #25c281; /* smoking-friendly venue */
+      --mine: #a78bfa;     /* spot the user saved themselves */
       --accent: #ffb02e;
     }
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -83,13 +84,29 @@
       backdrop-filter: blur(8px); box-shadow: 0 6px 20px rgba(0,0,0,.35);
     }
     .legend .row { display: flex; align-items: center; gap: 8px; margin: 3px 0; color: var(--muted); }
-    .dot { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px rgba(255,255,255,.15); }
+    .dot { width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 0 2px rgba(255,255,255,.15); flex: none; }
     .dot.public { background: var(--public); }
     .dot.business { background: var(--business); }
+    .dot.mine { background: var(--mine); }
+    /* The "my spots" legend row doubles as the button that opens the list. */
+    .legend .row.mine-row {
+      width: 100%; margin-top: 6px; padding: 6px 8px; border: none;
+      border-top: 1px solid rgba(255,255,255,.09); border-radius: 0 0 6px 6px;
+      background: transparent; color: var(--mine); font: inherit; font-size: 12px;
+      font-weight: 700; text-align: left; cursor: pointer;
+    }
+    /* `display: flex` above would otherwise beat the UA's [hidden] rule, so the
+       button would still show with nothing saved. */
+    .legend .row.mine-row[hidden] { display: none; }
+    .legend .row.mine-row:active { background: rgba(167,139,250,.14); }
+    .legend .row.mine-row .chev { margin-left: auto; opacity: .7; }
 
-    .locate {
+    .fabs {
       position: absolute; right: 14px; z-index: 1000;
       bottom: calc(env(safe-area-inset-bottom) + 14px);
+      display: flex; flex-direction: column; gap: 12px; align-items: center;
+    }
+    .locate {
       width: 56px; height: 56px; border-radius: 50%; border: none;
       background: var(--accent); color: #1a1205; font-size: 24px;
       box-shadow: 0 8px 24px rgba(0,0,0,.45); cursor: pointer;
@@ -99,11 +116,24 @@
     .locate.loading { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* "Save the spot I'm standing in" — smaller sibling of the locate button. */
+    .addspot {
+      width: 48px; height: 48px; border-radius: 50%; border: none;
+      background: var(--mine); color: #1b1130; font-size: 26px; font-weight: 700;
+      line-height: 1; box-shadow: 0 8px 24px rgba(0,0,0,.45); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .addspot:active { transform: scale(0.94); }
+    .addspot:disabled { opacity: .6; }
+    .addspot.loading { animation: spin 1s linear infinite; }
+
     /* markers */
     .pin { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid #fff;
            box-shadow: 0 2px 6px rgba(0,0,0,.5); }
     .pin.public { background: var(--public); }
     .pin.business { background: var(--business); }
+    /* Saved spots also get a ring, so they're distinguishable without colour. */
+    .pin.mine { background: var(--mine); box-shadow: 0 0 0 3px rgba(167,139,250,.32), 0 2px 6px rgba(0,0,0,.5); }
     .me { width: 16px; height: 16px; border-radius: 50%; background: #fff;
           border: 3px solid var(--accent); box-shadow: 0 0 0 6px rgba(255,176,46,.25); }
 
@@ -116,6 +146,15 @@
              border-radius: 999px; margin-bottom: 8px; }
     .badge.public { background: rgba(46,134,255,.18); color: #79b0ff; }
     .badge.business { background: rgba(37,194,129,.18); color: #5fe0ab; }
+    .badge.mine { background: rgba(167,139,250,.18); color: #c4b1ff; }
+    /* max-height matters: a portrait photo would otherwise make the popup taller
+       than the gap between the search bar and the buttons, and it can't pan clear. */
+    .pop-photo { width: 100%; max-width: 240px; max-height: 150px; object-fit: cover;
+                 border-radius: 10px; display: block; margin: 2px 0 8px; background: #0d131c; }
+    .pop-delete { width: 100%; margin-top: 8px; padding: 8px 6px; border: 1px solid rgba(255,120,120,.28);
+                  border-radius: 10px; background: transparent; color: #ff9a9a;
+                  font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+    .pop-delete:active { background: rgba(255,120,120,.12); }
     .pop-dist { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
     .pop-detail { font-size: 12.5px; color: var(--muted); margin: 2px 0; }
     .pop-btns { display: flex; gap: 8px; margin-top: 11px; }
@@ -131,6 +170,84 @@
       padding: 10px 14px; border-radius: 12px; font-size: 13px; text-align: center;
       box-shadow: 0 8px 24px rgba(0,0,0,.45); display: none;
     }
+
+    /* --- bottom sheets (save form + saved-spots list) --- */
+    .backdrop {
+      position: fixed; inset: 0; z-index: 1400; background: rgba(6,9,13,.62);
+      opacity: 0; visibility: hidden; transition: opacity .22s ease, visibility .22s ease;
+    }
+    .backdrop.open { opacity: 1; visibility: visible; }
+    /* fixed, not absolute: a closed sheet is parked below the bottom edge, and
+       an absolutely-positioned one would extend the document that far. The page
+       could then be scrolled — which focusing the name field does automatically
+       — dragging the parked sheet into view and leaving the map shifted up. */
+    .sheet {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 1500;
+      background: #182230; color: var(--text);
+      border-radius: 18px 18px 0 0; border-top: 1px solid rgba(255,255,255,.08);
+      padding: 8px 16px calc(env(safe-area-inset-bottom) + 16px);
+      box-shadow: 0 -12px 40px rgba(0,0,0,.55);
+      transform: translateY(102%); transition: transform .24s ease, visibility .24s ease;
+      max-height: 86%; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      /* The transform alone is a percentage of the sheet's own (content-driven,
+         changing) height, so don't trust it to fully clear the screen. */
+      visibility: hidden;
+    }
+    .sheet.open { transform: translateY(0); visibility: visible; }
+    .grabber { width: 38px; height: 4px; border-radius: 999px; background: rgba(255,255,255,.22);
+               margin: 4px auto 12px; }
+    .sheet h2 { font-size: 16px; margin: 0 0 4px; }
+    .sheet .hint { font-size: 12.5px; color: var(--muted); margin: 0 0 14px; line-height: 1.4; }
+    .sheet label { display: block; font-size: 12px; font-weight: 700; color: var(--muted);
+                   margin: 0 0 6px; letter-spacing: .3px; }
+    .sheet input[type="text"] {
+      width: 100%; padding: 11px 13px; border-radius: 12px; font-size: 16px;
+      border: 1px solid rgba(255,255,255,.14); background: #0f1621; color: var(--text);
+    }
+    .sheet input[type="text"]::placeholder { color: #6d7f92; }
+    .photo-row { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+    .photo-btn {
+      flex: 1; padding: 11px 10px; border-radius: 12px; cursor: pointer;
+      border: 1px dashed rgba(255,255,255,.22); background: #0f1621; color: var(--text);
+      font: inherit; font-size: 13.5px; font-weight: 600; text-align: center;
+    }
+    .photo-btn:active { background: #131c28; }
+    .photo-preview { display: none; margin-top: 12px; position: relative; }
+    .photo-preview.has { display: block; }
+    .photo-preview img { width: 100%; max-height: 190px; object-fit: cover;
+                         border-radius: 12px; display: block; background: #0d131c; }
+    .photo-clear {
+      position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border-radius: 50%;
+      border: none; background: rgba(10,14,20,.82); color: #fff; font-size: 17px; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .sheet-btns { display: flex; gap: 10px; margin-top: 18px; }
+    .sheet-btns button { flex: 1; padding: 13px 10px; border: none; border-radius: 12px;
+                         font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; }
+    .btn-save { background: var(--mine); color: #1b1130; }
+    .btn-save:disabled { opacity: .55; }
+    .btn-cancel { background: #2a3646; color: var(--text); }
+
+    /* saved-spots list */
+    .spot-list { list-style: none; margin: 0; padding: 0; }
+    .spot-list li { border-top: 1px solid rgba(255,255,255,.07); }
+    .spot-list li:first-child { border-top: none; }
+    .spot-item {
+      width: 100%; display: flex; gap: 11px; align-items: center; text-align: left;
+      padding: 11px 2px; background: none; border: none; color: var(--text);
+      font: inherit; cursor: pointer;
+    }
+    .spot-item:active { background: rgba(255,255,255,.04); }
+    .spot-thumb { width: 46px; height: 46px; border-radius: 10px; object-fit: cover;
+                  flex: none; background: #0f1621; }
+    .spot-thumb.empty { display: flex; align-items: center; justify-content: center;
+                        font-size: 20px; color: var(--mine); }
+    .spot-text { display: block; min-width: 0; flex: 1; }
+    .spot-name { display: block; font-size: 14.5px; font-weight: 600; white-space: nowrap;
+                 overflow: hidden; text-overflow: ellipsis; }
+    .spot-meta { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .empty-note { color: var(--muted); font-size: 13.5px; text-align: center;
+                  padding: 22px 6px; line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -150,10 +267,55 @@
   <div class="legend">
     <div class="row"><span class="dot public"></span> Official smoking area</div>
     <div class="row"><span class="dot business"></span> Smoking-friendly venue</div>
+    <button class="row mine-row" id="mySpotsBtn" hidden aria-haspopup="dialog">
+      <span class="dot mine"></span> <span id="mySpotsCount">My spots</span> <span class="chev">›</span>
+    </button>
   </div>
 
-  <button class="locate" id="locate" title="Find me" aria-label="Find my location">◎</button>
+  <div class="fabs">
+    <button class="addspot" id="addSpot" title="Save this spot"
+            aria-label="Save my current location as a smoking spot">＋</button>
+    <button class="locate" id="locate" title="Find me" aria-label="Find my location">◎</button>
+  </div>
   <div class="toast" id="toast"></div>
+
+  <!-- Save-a-spot form -->
+  <div class="backdrop" id="backdrop"></div>
+  <div class="sheet" id="addSheet" role="dialog" aria-modal="true" aria-labelledby="addSheetTitle">
+    <div class="grabber"></div>
+    <h2 id="addSheetTitle">Save this spot</h2>
+    <p class="hint" id="addSheetHint">Getting your location…</p>
+
+    <label for="spotName">Name</label>
+    <input type="text" id="spotName" maxlength="80" autocomplete="off"
+           enterkeyhint="done" placeholder="e.g. Station east exit ashtray" />
+
+    <div class="photo-row">
+      <button type="button" class="photo-btn" id="photoBtn">📷 Add a photo (optional)</button>
+    </div>
+    <!-- No `capture` attribute: iOS then offers Camera *or* Photo Library. -->
+    <input type="file" id="photoInput" accept="image/*" hidden />
+    <div class="photo-preview" id="photoPreview">
+      <img id="photoImg" alt="Photo of this spot" />
+      <button type="button" class="photo-clear" id="photoClear" aria-label="Remove photo">✕</button>
+    </div>
+
+    <div class="sheet-btns">
+      <button type="button" class="btn-cancel" id="cancelSpot">Cancel</button>
+      <button type="button" class="btn-save" id="saveSpot">Save spot</button>
+    </div>
+  </div>
+
+  <!-- Saved-spots list -->
+  <div class="sheet" id="listSheet" role="dialog" aria-modal="true" aria-labelledby="listSheetTitle">
+    <div class="grabber"></div>
+    <h2 id="listSheetTitle">My saved spots</h2>
+    <p class="hint">Tap one to jump to it on the map.</p>
+    <ul class="spot-list" id="spotList"></ul>
+    <div class="sheet-btns">
+      <button type="button" class="btn-cancel" id="closeList">Close</button>
+    </div>
+  </div>
 
   <script src="vendor/leaflet.js"></script>
   <script src="app-core.js"></script>
@@ -175,6 +337,10 @@
     }).addTo(map);
 
     var markersLayer = L.layerGroup().addTo(map);
+    // Saved spots live in their own layer, added last so they draw on top.
+    // Crucially it is never cleared by an Overpass refresh, so your own pins
+    // stay put even when the area search returns nothing or fails.
+    var mineLayer = L.layerGroup().addTo(map);
     var meMarker = null;
     var userLatLng = null;
     var queryTimer = null;
@@ -207,6 +373,12 @@
       return L.divIcon({ className: "", html: '<div class="pin ' + category + '"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
     }
 
+    var CATEGORY_LABEL = {
+      public: "Official smoking area",
+      business: "Smoking-friendly venue",
+      mine: "Saved by you"
+    };
+
     function popupHtml(spot) {
       var distLine = "";
       if (userLatLng) {
@@ -216,15 +388,24 @@
       var details = spot.details.map(function (d) {
         return '<div class="pop-detail">' + escapeHtml(d) + "</div>";
       }).join("");
-      var label = spot.category === "public" ? "Official smoking area" : "Smoking-friendly venue";
+      // normalizeMySpot() guarantees photo is a data: URL, never a remote one.
+      var photo = spot.photo
+        ? '<img class="pop-photo" src="' + escapeHtml(spot.photo) + '" alt="" />'
+        : "";
+      var del = spot.mine
+        ? '<button type="button" class="pop-delete" data-delete-id="' +
+          escapeHtml(spot.id) + '">Delete this spot</button>'
+        : "";
       return (
+        photo +
         '<div class="pop-name">' + escapeHtml(spot.name) + "</div>" +
-        '<span class="badge ' + spot.category + '">' + label + "</span>" +
+        '<span class="badge ' + spot.category + '">' +
+          (CATEGORY_LABEL[spot.category] || "Smoking spot") + "</span>" +
         distLine + details +
         '<div class="pop-btns">' +
           '<a class="btn-apple" href="' + SmokeCore.appleMapsUrl(spot.lat, spot.lng) + '">Walk (Apple)</a>' +
           '<a class="btn-google" href="' + SmokeCore.googleMapsUrl(spot.lat, spot.lng) + '" target="_blank" rel="noopener">Google</a>' +
-        "</div>"
+        "</div>" + del
       );
     }
 
@@ -244,6 +425,310 @@
           .addTo(markersLayer);
       });
     }
+
+    // ---- Saved spots -------------------------------------------------------
+    // "I'm standing in a good one right now" — pin it, name it, photograph it.
+    // Stored in localStorage, so it works offline and survives a reload.
+
+    var PHOTO_MAX_PX = 720;    // long edge after downscale
+    var PHOTO_QUALITY = 0.65;  // JPEG quality — lands around 50-80 KB per photo
+    var mySpots = [];
+    var pendingSpot = null;    // {lat, lng, accuracy} captured when the sheet opened
+    var photoDataUrl = null;
+    var photoFile = null;      // kept so we can re-encode smaller if storage is tight
+
+    var backdrop = document.getElementById("backdrop");
+    var addSheet = document.getElementById("addSheet");
+    var listSheet = document.getElementById("listSheet");
+    var addBtn = document.getElementById("addSpot");
+    var nameInput = document.getElementById("spotName");
+    var hintEl = document.getElementById("addSheetHint");
+    var saveBtn = document.getElementById("saveSpot");
+    var photoInput = document.getElementById("photoInput");
+    var photoPreview = document.getElementById("photoPreview");
+    var photoImg = document.getElementById("photoImg");
+    var mySpotsBtn = document.getElementById("mySpotsBtn");
+    var mySpotsCountEl = document.getElementById("mySpotsCount");
+    var spotListEl = document.getElementById("spotList");
+
+    function loadMySpots() {
+      var raw = null;
+      try { raw = localStorage.getItem(SmokeCore.MY_SPOTS_KEY); } catch (e) { raw = null; }
+      mySpots = SmokeCore.parseMySpots(raw);
+    }
+
+    // Returns false instead of throwing when the storage quota is exceeded,
+    // so callers can degrade gracefully rather than losing the spot.
+    function persistMySpots(list) {
+      try {
+        localStorage.setItem(SmokeCore.MY_SPOTS_KEY, SmokeCore.serializeMySpots(list));
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function renderMySpots() {
+      mineLayer.clearLayers();
+      mySpots.forEach(function (s) {
+        var m = SmokeCore.mySpotToMarker(s);
+        var marker = L.marker([m.lat, m.lng], { icon: pinIcon("mine"), zIndexOffset: 500 })
+          .bindPopup(popupHtml(m), { closeButton: true, autoPan: false });
+        marker.spotId = s.id;
+        marker.addTo(mineLayer);
+      });
+      refreshMySpotsButton();
+    }
+
+    function refreshMySpotsButton() {
+      var n = mySpots.length;
+      mySpotsBtn.hidden = n === 0;
+      mySpotsCountEl.textContent = n === 1 ? "1 saved spot" : n + " saved spots";
+    }
+
+    function openSheet(el) {
+      backdrop.classList.add("open");
+      el.classList.add("open");
+    }
+    function closeSheets() {
+      backdrop.classList.remove("open");
+      addSheet.classList.remove("open");
+      listSheet.classList.remove("open");
+    }
+
+    // Fresh GPS fix for the spot we're about to save. Resolves null (never
+    // rejects) if location is unavailable, so the caller can fall back.
+    function currentPositionForSave() {
+      return new Promise(function (resolve) {
+        if (!navigator.geolocation) return resolve(null);
+        navigator.geolocation.getCurrentPosition(
+          function (pos) {
+            resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy });
+          },
+          function () { resolve(null); },
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
+        );
+      });
+    }
+
+    function openAddSheet() {
+      pendingSpot = null;
+      photoDataUrl = null;
+      photoFile = null;
+      nameInput.value = "";
+      photoInput.value = "";
+      photoPreview.classList.remove("has");
+      photoImg.removeAttribute("src");
+      saveBtn.disabled = true;
+      hintEl.textContent = "Getting your location…";
+      openSheet(addSheet);
+
+      currentPositionForSave().then(function (p) {
+        if (p) {
+          pendingSpot = p;
+          hintEl.textContent = "Using your GPS location" +
+            (p.accuracy ? " — accurate to about " + Math.round(p.accuracy) + " m." : ".");
+        } else if (userLatLng) {
+          pendingSpot = { lat: userLatLng.lat, lng: userLatLng.lng, accuracy: null };
+          hintEl.textContent = "GPS unavailable — using your last known location.";
+        } else {
+          var c = map.getCenter();
+          pendingSpot = { lat: c.lat, lng: c.lng, accuracy: null };
+          hintEl.textContent = "GPS unavailable — using the centre of the map. Cancel and pan there first if that's wrong.";
+        }
+        saveBtn.disabled = false;
+      });
+    }
+
+    // Decode a picked file to something drawable. createImageBitmap honours EXIF
+    // orientation, so portrait phone photos don't come out sideways; the <img>
+    // path is the fallback for browsers without it.
+    function loadBitmap(file) {
+      function viaImg() {
+        return new Promise(function (resolve, reject) {
+          var url = URL.createObjectURL(file);
+          var img = new Image();
+          img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
+          img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("decode failed")); };
+          img.src = url;
+        });
+      }
+      if (!window.createImageBitmap) return viaImg();
+      try {
+        return createImageBitmap(file, { imageOrientation: "from-image" }).catch(viaImg);
+      } catch (e) {
+        return viaImg();
+      }
+    }
+
+    // Downscale before storing. A raw phone photo is several MB, which would
+    // blow the ~5 MB localStorage budget after one or two saves.
+    function processPhoto(file, maxPx, quality) {
+      return loadBitmap(file).then(function (img) {
+        var dims = SmokeCore.photoScaleDims(img.width, img.height, maxPx);
+        if (!dims) throw new Error("bad image");
+        var canvas = document.createElement("canvas");
+        canvas.width = dims.w;
+        canvas.height = dims.h;
+        canvas.getContext("2d").drawImage(img, 0, 0, dims.w, dims.h);
+        if (img.close) img.close();
+        return canvas.toDataURL("image/jpeg", quality);
+      });
+    }
+
+    document.getElementById("photoBtn").addEventListener("click", function () {
+      photoInput.click();
+    });
+
+    photoInput.addEventListener("change", function () {
+      var file = photoInput.files && photoInput.files[0];
+      if (!file) return;
+      hintEl.textContent = "Processing photo…";
+      processPhoto(file, PHOTO_MAX_PX, PHOTO_QUALITY).then(function (dataUrl) {
+        photoFile = file;
+        photoDataUrl = dataUrl;
+        photoImg.src = dataUrl;
+        photoPreview.classList.add("has");
+        hintEl.textContent = pendingSpot && pendingSpot.accuracy
+          ? "Using your GPS location — accurate to about " + Math.round(pendingSpot.accuracy) + " m."
+          : "Photo added.";
+      }).catch(function () {
+        toast("Couldn't read that photo. You can still save the spot without one.");
+        hintEl.textContent = "Photo couldn't be read — saving without it.";
+      });
+    });
+
+    document.getElementById("photoClear").addEventListener("click", function () {
+      photoDataUrl = null;
+      photoFile = null;
+      photoInput.value = "";
+      photoImg.removeAttribute("src");
+      photoPreview.classList.remove("has");
+    });
+
+    // Store the spot. If the quota rejects it, re-encode the photo smaller and
+    // retry, then finally save without the photo — losing the picture beats
+    // losing the pin.
+    function commitSpot(spot) {
+      var list = SmokeCore.upsertMySpot(mySpots, spot);
+      if (persistMySpots(list)) return Promise.resolve({ list: list, droppedPhoto: false });
+
+      var retry = (photoFile && spot.photo)
+        ? processPhoto(photoFile, 420, 0.5).then(function (small) {
+            return SmokeCore.upsertMySpot(mySpots, Object.assign({}, spot, { photo: small }));
+          }).catch(function () { return null; })
+        : Promise.resolve(null);
+
+      return retry.then(function (smaller) {
+        if (smaller && persistMySpots(smaller)) return { list: smaller, droppedPhoto: false };
+        var noPhoto = SmokeCore.upsertMySpot(mySpots, Object.assign({}, spot, { photo: null }));
+        if (persistMySpots(noPhoto)) return { list: noPhoto, droppedPhoto: !!spot.photo };
+        throw new Error("quota");
+      });
+    }
+
+    saveBtn.addEventListener("click", function () {
+      if (!pendingSpot) return;
+      var now = Date.now();
+      var spot = SmokeCore.normalizeMySpot({
+        id: SmokeCore.makeSpotId(now, Math.random()),
+        lat: pendingSpot.lat,
+        lng: pendingSpot.lng,
+        name: nameInput.value,
+        photo: photoDataUrl,
+        savedAt: now,
+        accuracy: pendingSpot.accuracy
+      });
+      if (!spot) { toast("Couldn't save — that location looked invalid."); return; }
+
+      saveBtn.disabled = true;
+      commitSpot(spot).then(function (res) {
+        mySpots = res.list;
+        renderMySpots();
+        closeSheets();
+        if (res.droppedPhoto) {
+          toast("Spot saved, but the photo wouldn't fit in storage. Delete an older spot to free space.");
+          setStatus("Saved “" + spot.name + "” (without photo)");
+        } else {
+          setStatus("Saved “" + spot.name + "”");
+        }
+      }).catch(function () {
+        toast("Couldn't save — this device's storage is full.");
+      }).then(function () {
+        saveBtn.disabled = false;
+      });
+    });
+
+    addBtn.addEventListener("click", openAddSheet);
+    document.getElementById("cancelSpot").addEventListener("click", closeSheets);
+    document.getElementById("closeList").addEventListener("click", closeSheets);
+    backdrop.addEventListener("click", closeSheets);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeSheets();
+    });
+
+    // Delete, from a saved spot's popup. Leaflet calls disableClickPropagation()
+    // on popup content, so clicks never reach document — bind on the element
+    // itself each time a popup opens.
+    map.on("popupopen", function (e) {
+      var el = e.popup.getElement();
+      var btn = el && el.querySelector(".pop-delete");
+      if (!btn) return;
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-delete-id");
+        if (!id || !window.confirm("Delete this saved spot?")) return;
+        var list = SmokeCore.removeMySpot(mySpots, id);
+        if (!persistMySpots(list)) { toast("Couldn't update storage."); return; }
+        mySpots = list;
+        map.closePopup();
+        renderMySpots();
+        setStatus("Spot deleted");
+      });
+    });
+
+    // The saved-spots list: nearest first when we know where you are.
+    function renderSpotList() {
+      var sorted = SmokeCore.sortMySpots(mySpots, userLatLng);
+      spotListEl.innerHTML = "";
+      if (!sorted.length) {
+        spotListEl.innerHTML = '<li class="empty-note">No saved spots yet.<br />Tap ＋ when you find a good one.</li>';
+        return;
+      }
+      sorted.forEach(function (s) {
+        var meta = [];
+        if (userLatLng) meta.push(SmokeCore.formatDistance(SmokeCore.distanceMeters(userLatLng, s)));
+        if (s.savedAt) meta.push(SmokeCore.formatSavedAt(s.savedAt));
+        var li = document.createElement("li");
+        li.innerHTML =
+          '<button type="button" class="spot-item" data-goto-id="' + escapeHtml(s.id) + '">' +
+            (s.photo
+              ? '<img class="spot-thumb" src="' + escapeHtml(s.photo) + '" alt="" />'
+              : '<span class="spot-thumb empty">🚬</span>') +
+            '<span class="spot-text">' +
+              '<span class="spot-name">' + escapeHtml(s.name) + "</span>" +
+              '<span class="spot-meta">' + escapeHtml(meta.join(" · ")) + "</span>" +
+            "</span>" +
+          "</button>";
+        spotListEl.appendChild(li);
+      });
+    }
+
+    mySpotsBtn.addEventListener("click", function () {
+      renderSpotList();
+      openSheet(listSheet);
+    });
+
+    spotListEl.addEventListener("click", function (e) {
+      var btn = e.target && e.target.closest && e.target.closest(".spot-item");
+      if (!btn) return;
+      var id = btn.getAttribute("data-goto-id");
+      closeSheets();
+      mineLayer.eachLayer(function (l) {
+        if (l.spotId !== id) return;
+        map.setView(l.getLatLng(), Math.max(map.getZoom(), 17));
+        l.openPopup();
+      });
+    });
 
     function fetchOverpass(query, idx) {
       idx = idx || 0;
@@ -305,12 +790,12 @@
       var pop = el.getBoundingClientRect();
       var topbar = document.querySelector(".topbar");
       var legend = document.querySelector(".legend");
-      var loc = document.getElementById("locate");
+      var fabs = document.querySelector(".fabs");
       var reserve = {
         top: topbar ? topbar.getBoundingClientRect().bottom - mapRect.top : 110,
         bottom: Math.max(
           legend ? mapRect.bottom - legend.getBoundingClientRect().top : 0,
-          loc ? mapRect.bottom - loc.getBoundingClientRect().top : 0
+          fabs ? mapRect.bottom - fabs.getBoundingClientRect().top : 0
         ),
         left: 6, right: 6, pad: 10
       };
@@ -330,6 +815,9 @@
       map.setView([lat, lng], 16);
       lastQueryKey = "";
       loadForCurrentView();
+      // Saved-spot popups carry a "X m away" line, so redraw them now that the
+      // reference point has moved.
+      renderMySpots();
     }
 
     function locate() {
@@ -407,6 +895,11 @@
         navigator.serviceWorker.register("sw.js").catch(function () {});
       });
     }
+
+    // Draw any previously saved spots immediately — they come from localStorage,
+    // so they're on the map before (and without) any network call.
+    loadMySpots();
+    renderMySpots();
 
     // Auto-try location on first load (will prompt for permission).
     setTimeout(locate, 600);

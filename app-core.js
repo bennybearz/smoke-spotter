@@ -256,6 +256,153 @@
     return { dx: dx, dy: dy };
   }
 
+  // --- User-saved spots ------------------------------------------------------
+  // Spots the user pins themselves ("I'm standing in one right now"), stored in
+  // localStorage so they survive a reload and work with no network. Kept here,
+  // away from the DOM, so the storage format is unit-tested.
+  //
+  // Record shape: { id, lat, lng, name, photo, savedAt, accuracy }
+  //   photo    = a data: URL (already downscaled by the page), or null
+  //   savedAt  = epoch ms
+  //   accuracy = GPS accuracy in metres, or null if unknown
+
+  var MY_SPOTS_KEY = "smokespotter.mySpots.v1";
+  var MAX_SPOT_NAME = 80;
+
+  // Deterministic given its inputs, so it can be tested. The page passes
+  // Date.now() and Math.random().
+  function makeSpotId(now, rand) {
+    var t = Math.floor(Number(now) || 0).toString(36);
+    var r = Math.floor(Math.abs(Number(rand) || 0) * 1e9).toString(36);
+    return "mine-" + t + "-" + r;
+  }
+
+  // Coerce one stored record into a clean spot, or null if it's unusable.
+  // Defensive because localStorage can hold anything a previous version wrote.
+  function normalizeMySpot(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    var id = raw.id ? String(raw.id) : "";
+    if (!id) return null;
+    var lat = Number(raw.lat), lng = Number(raw.lng);
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    var name = String(raw.name == null ? "" : raw.name).trim().slice(0, MAX_SPOT_NAME);
+    if (!name) name = "My smoking spot";
+    // Only accept inline image data — never an arbitrary URL from storage.
+    var photo = typeof raw.photo === "string" && /^data:image\//.test(raw.photo)
+      ? raw.photo : null;
+    var savedAt = Number(raw.savedAt);
+    if (!isFinite(savedAt) || savedAt <= 0) savedAt = 0;
+    var acc = Number(raw.accuracy);
+    return {
+      id: id,
+      lat: lat,
+      lng: lng,
+      name: name,
+      photo: photo,
+      savedAt: savedAt,
+      accuracy: isFinite(acc) && acc >= 0 ? Math.round(acc) : null,
+    };
+  }
+
+  // Read the stored JSON string -> clean array. Never throws; bad data = [].
+  function parseMySpots(text) {
+    var arr;
+    try {
+      arr = JSON.parse(text);
+    } catch (e) {
+      return [];
+    }
+    if (!Array.isArray(arr)) return [];
+    var seen = {};
+    var out = [];
+    arr.forEach(function (raw) {
+      var s = normalizeMySpot(raw);
+      if (!s || seen[s.id]) return;
+      seen[s.id] = true;
+      out.push(s);
+    });
+    return out;
+  }
+
+  function serializeMySpots(list) {
+    return JSON.stringify(list || []);
+  }
+
+  // Add a spot, or replace the existing one with the same id. Returns a new
+  // array (never mutates), newest last.
+  function upsertMySpot(list, spot) {
+    var s = normalizeMySpot(spot);
+    if (!s) return (list || []).slice();
+    var out = (list || []).filter(function (x) { return x.id !== s.id; });
+    out.push(s);
+    return out;
+  }
+
+  function removeMySpot(list, id) {
+    return (list || []).filter(function (x) { return x.id !== id; });
+  }
+
+  // Local-time "YYYY-MM-DD HH:MM". Deliberately not toLocaleString(), which
+  // varies by device locale and would make this untestable.
+  function formatSavedAt(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return "";
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+      " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
+  function mySpotDetails(s) {
+    var out = [];
+    if (s.savedAt) out.push("Saved " + formatSavedAt(s.savedAt));
+    if (s.accuracy != null) out.push("GPS accuracy ±" + s.accuracy + " m");
+    return out;
+  }
+
+  // Present a saved spot in the same shape as an Overpass spot, so the map and
+  // popup code can render both through one path. Category 'mine' is ours alone
+  // — categorize() never returns it, since OSM data can't be user-saved.
+  function mySpotToMarker(s) {
+    return {
+      id: s.id,
+      lat: s.lat,
+      lng: s.lng,
+      category: "mine",
+      name: s.name,
+      details: mySpotDetails(s),
+      photo: s.photo,
+      savedAt: s.savedAt,
+      mine: true,
+    };
+  }
+
+  // Target dimensions for a downscaled photo, preserving aspect ratio.
+  // Images already within `max` are left alone (never upscale).
+  function photoScaleDims(w, h, max) {
+    w = Number(w); h = Number(h); max = Number(max);
+    if (!isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) return null;
+    if (!isFinite(max) || max <= 0) return null;
+    if (w <= max && h <= max) return { w: Math.round(w), h: Math.round(h) };
+    var s = Math.min(max / w, max / h);
+    return { w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)) };
+  }
+
+  // Sort saved spots for the "my spots" list: nearest first when we know where
+  // the user is, otherwise newest first. Returns a new array.
+  function sortMySpots(list, origin) {
+    var out = (list || []).slice();
+    if (origin && isFinite(origin.lat) && isFinite(origin.lng)) {
+      out.sort(function (a, b) {
+        return distanceMeters(origin, a) - distanceMeters(origin, b);
+      });
+    } else {
+      out.sort(function (a, b) { return (b.savedAt || 0) - (a.savedAt || 0); });
+    }
+    return out;
+  }
+
   // Haversine distance in metres, for "X m away" in popups.
   function distanceMeters(a, b) {
     var R = 6371000;
@@ -300,6 +447,20 @@
     panDelta: panDelta,
     distanceMeters: distanceMeters,
     formatDistance: formatDistance,
+    // user-saved spots
+    MY_SPOTS_KEY: MY_SPOTS_KEY,
+    MAX_SPOT_NAME: MAX_SPOT_NAME,
+    makeSpotId: makeSpotId,
+    normalizeMySpot: normalizeMySpot,
+    parseMySpots: parseMySpots,
+    serializeMySpots: serializeMySpots,
+    upsertMySpot: upsertMySpot,
+    removeMySpot: removeMySpot,
+    formatSavedAt: formatSavedAt,
+    mySpotDetails: mySpotDetails,
+    mySpotToMarker: mySpotToMarker,
+    photoScaleDims: photoScaleDims,
+    sortMySpots: sortMySpots,
   };
 
   if (typeof module !== "undefined" && module.exports) {
